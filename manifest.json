@@ -1,0 +1,9 @@
+{
+  "manifest_version": 3,
+  "name": "Kinlink (dev)",
+  "version": "0.1.0",
+  "description": "Dev build: a paired peer can fetch URLs through this browser.",
+  "action": { "default_title": "Open host page" },
+  "background": { "service_worker": "sw.js" },
+  "optional_host_permissions": ["<all_urls>"]
+}
