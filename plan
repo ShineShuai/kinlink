@@ -1,0 +1,76 @@
+# Project: Browser-based P2P "social proxy" for a pair of peers
+
+## Goal
+Two users (a pair), each partially restricted, browse via
+each other's connection, both directions at the same time. No operated exit servers.
+Setup servers are OK (STUN/WSS/MQTT/Nostr/manual).
+Scalability beyond 2 peers is future work.
+
+## Decisions
+- Web app + browser only. No native helper, no new browser (revisit on evidence).
+- Client = plain web app (any modern browser). Host = small WebExtension,
+  because of CORS/SOP: page code can't read arbitrary cross-origin responses,
+  and WebSocket/WebRTC can't reach arbitrary sites. Only an extension
+  (host_permissions) or a WS->TCP gateway can be an exit.
+- Extension priority: Chromium MV3 (Chrome/Edge/Brave) > Firefox > Safari (Client-only).
+- Exit sees plaintext (social trust, not anonymity). Host IP is origin (liability).
+
+## Architecture
+- Node module, container-agnostic (Chromium offscreen doc reason WEB_RTC /
+  Firefox event page / plain page): signaling adapters, transport manager,
+  AEAD frames, mux, exit adapter.
+- Pairing: 128-bit secret in URL fragment/QR; HKDF -> room id, signaling key,
+  session keys. AES-GCM (WebCrypto). SDP sealed; DTLS fingerprint pinned.
+- Signaling adapters: manual QR/text; own WSS relay; MQTT over WSS
+  (public brokers, e.g. broker-cn.emqx.io); Nostr relays.
+- Data transports: WebRTC DataChannel (primary); WSS relay fallback
+  (required: CGNAT/symmetric NAT); TURNS:443 optional; WebTransport later
+  (GFW does SNI-based QUIC blocking since Apr 2024).
+- Mux (HTTP-level): OPEN, BODY, RESP_HEAD, RESP_BODY, END, RST, WINDOW;
+  16 KiB frames, credit flow control, stream-id parity (A odd, B even).
+- Exit adapters: fetch-ext (v1); ws-exit (Wisp/Snowflake-style, later); native (later).
+- Extension = stateless fetch executor: optional host_permissions,
+  credentials:'omit', DNR session rules for Cookie/Referer/Origin,
+  webRequest observe for Set-Cookie, SSRF guard (RFC1918/loopback/link-local,
+  re-check after DNS), ports 80/443, follow redirects and report final URL.
+- Client rendering: Service Worker at /~/<enc-url> + URL/JS rewriting
+  (Scramjet/Ultraviolet, check AGPL); sandboxed iframes; keys in isolated worker.
+- Symmetric roles: each peer is Client + Host (host_enabled flag),
+  reachability probes -> capability advert -> per-domain "via peer" routing.
+- Background: Chromium offscreen doc (no lifetime limit except audio);
+  strict-web: pinned tab (real-time connections are exempt from timer
+  throttling), Memory Saver exception, no timer-driven pumps; handle
+  sleep/wake with ICE restart + transport fallback. Mobile = foreground Client only.
+
+## Threats
+IP/port blocking (STUN, signaling, peer IPs); SNI/DNS blocking of
+signaling/relay domains; UDP/DTLS fingerprinting/throttling; QUIC SNI blocking;
+malicious signaling server (AEAD); endpoint/legal risk. A static pair has no
+pool for resilience (unlike Snowflake) -> fallbacks matter.
+
+## Prior art
+Snowflake (stranger pool, operated bridges, WebRTC->WS), uProxy (friend-to-friend
+extension, discontinued), Flashproxy, Lantern Unbounded, Wisp/epoxy-tls,
+Ultraviolet/Scramjet.
+
+## Plan
+1. M0 (1-2 wk): diagnostics page (STUN/WSS/MQTT/QUIC reachability, NAT type)
+   + hidden-tab/offscreen soak test, run from 2 real X networks.
+   Gate 1: P2P success rate -> relay investment. Gate 2: can the in-X
+   peer install the extension?
+2. M1: pairing, signaling adapters, WebRTC + WSS relay, encrypted frames.
+3. M2: mux + extension exit, SSRF guard, headless Host in offscreen doc.
+4. M3: Service Worker rewriting; 20-site corpus per direction.
+5. M4: transport manager, sleep/wake recovery, STUN health checks.
+6. M5: bidirectional UX, routing rules, consent, threat-model review.
+7. Later: desktop wrapper with SOCKS, ws-exit pool, browser fork only if
+   measured evidence demands it.
+
+## To verify in M0
+Firefox event-page survival with open WebRTC; fetch from offscreen doc with
+host_permissions; mainland-reachable STUN list; extension install path in
+X (store access vs sideload); chrome-vs-firefox WebRTC interop matrix.
+
+## Start here
+Implement M0: diagnostics page + signaling adapter interface + two-tab
+manual-SDP WebRTC echo/throughput test.
