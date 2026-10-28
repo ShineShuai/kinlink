@@ -7,8 +7,13 @@ export const renderedUrl = (url) => new URL(`~/${url}`, new URL('.', location.hr
 // getBrowse() -> { fetch(url, { method, headers, body, referer }) } (see browse.js) or undefined.
 export async function startBridge(getBrowse, onlog = () => {}) {
   const sw = navigator.serviceWorker;
-  await sw.register('render-sw.js', { type: 'module' });
-  const beat = async () => (await sw.ready).active?.postMessage({ type: 'beat' });
+  const ensure = () => sw.register('render-sw.js', { type: 'module' });
+  await ensure();
+  const beat = async () => {
+    // Safety net: if a page managed to unregister the worker, bring it back.
+    if (!(await sw.getRegistration())) await ensure().catch((e) => onlog(`render: ${e.message}`));
+    (await sw.ready).active?.postMessage({ type: 'beat' });
+  };
   sw.onmessage = async ({ data, ports: [port] }) => {
     if (data?.type === 'who') return beat();
     if (data?.type !== 'req') return;

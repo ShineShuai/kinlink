@@ -10,12 +10,12 @@ The Client never contacts the target site.
 ## Test (two machines)
 1. Host: `chrome://extensions` > Developer mode > Load unpacked > the folder with
    `manifest.json`. The app opens (later: puzzle icon > pin Kinlink).
-2. Host tab: mode `mqtt`, "New secret", tick "serve requests" (grant), Connect,
+2. Host tab: "New secret", tick "serve requests" (grant), Connect,
    "Copy invite link", send the link.
 3. Client: open the invite link. It connects and offers by itself, nothing to click. The offer is
    re-sent for 60 s, so it does not matter which side is first.
 4. The status line shows `signaling: 2/3 signaling servers | link: connected | peer: build
-   0010, serving yes`. Then either:
+   0011, serving yes`. Then either:
    - "Open rendered": new tab at `.../kinlink/~/<url>`, a real page through the peer
      (hosted web page only; keep the app tab open). Typing `.../kinlink/~/example.com/` works too.
    - "Fetch via peer": script-free preview in this page (also works in the extension page).
@@ -37,12 +37,17 @@ If it does not connect (the log says where it stops):
   (mDNS) and many routers do not hairpin NAT. Test from two different networks.
 - Link `connected` but `no hello`: one side runs old code. Reload the extension and all tabs.
 
-One machine, offline: mode `bc` in two tabs of the same address (extension page or
-`python3 -m http.server 8000` > `http://localhost:8000/`). `bc` does not work across origins.
+Signaling is always MQTT (all brokers at once, nothing to choose). `?signaling=bc` is a dev-only
+shortcut: BroadcastChannel between two tabs of one browser and one origin, no network; it is
+never selected automatically.
 
 Invite link base: field above the status line (extension page default: the hosted page; set
-`http://localhost:8000/` to test with a local copy). The invite link always switches the
-Client to mode mqtt.
+`http://localhost:8000/` to test with a local copy, served by `python3 -m http.server 8000`).
+
+Corpus (needs internet, run locally): `python3 test/corpus.py` loads ~20 real sites through the
+real extension and the rendering layer in one Chromium and writes `corpus-report/report.md` with a
+PASS/WARN/FAIL per site and a screenshot. `python3 test/corpus.py https://my.site/ ...` for your
+own list. This is the measurement for "is rewriting good enough?".
 
 Diagnostics: `.../kinlink/diag.html?auto` runs the probes on load; "Copy JSON" for results.
 
@@ -81,7 +86,8 @@ Local: `npm test`, `bash scripts/build-site.sh`,
 - `src/signaling.js`, `src/mqtt.js`: signaling adapters; `FanoutAdapter` uses all brokers at once. `src/diag.js`: probes and endpoint list.
 - `manifest.json`, `background.js`: extension shell (opens `index.html`).
 - `test/*.mjs`: unit tests (fake broker, fake RTCPeerConnection). `test/e2e.py` (+ `harness.html`): browser test of rendering and pairing through a fake broker.
-  `test/e2e_ext.py`: loads the real extension as Host and runs a cookie-consent flow. `scripts/`: build.
+  `test/e2e_ext.py`: loads the real extension as Host and runs a cookie-consent flow.
+  `test/corpus.py`: the site corpus (manual, needs internet). `scripts/`: build.
 
 ## Known gaps
 - Only GET and POST (body <= 150 KiB). `document.cookie` is stubbed: cookies set by scripts are
@@ -92,7 +98,8 @@ Local: `npm test`, `bash scripts/build-site.sh`,
 - JS is not rewritten, only hooked at run time. Not covered: `location.hostname` and friends
   (scripts see our host), `document.write`, dynamic `srcset`/`<style>`, static or dynamic
   `import` of absolute URLs, WebSocket. JS-heavy sites (e.g. google.com) may stay broken.
-- Rendered pages share the app's origin (localStorage, IndexedDB are shared between rendered
+- Rendered pages share the app's origin. Pages cannot see, unregister or replace the Service
+  Worker (hooked), and the app tab re-registers it within 5 s if it is removed anyway (localStorage, IndexedDB are shared between rendered
   sites). Mitigations: opened with `noopener`, secret kept in the app tab only, CSP fail-closed.
   After a Service Worker restart, a malicious page could race to announce itself as the app tab.
   Real fix: serve rendered pages from a dedicated origin.

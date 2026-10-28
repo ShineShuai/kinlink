@@ -30,7 +30,7 @@ if (!isExt) try { localStorage.removeItem('kinlink.secret'); } catch { /* storag
 const CSP = '<meta http-equiv="Content-Security-Policy" '
   + 'content="default-src \'none\'; style-src \'unsafe-inline\'; img-src data:">';
 const ORIGINS = { origins: ['<all_urls>'] };
-const BUILD = '0010';
+const BUILD = '0011';
 const PAGES_URL = 'https://shineshuai.github.io/kinlink/'; // hosted Client page
 let peer, api, sig;
 const jar = new Jar(); // cookies of the sites we browse, kept in this tab only
@@ -45,7 +45,9 @@ const showPeer = (m) => {
   state.peer = `peer: build ${m.build}, serving ${m.serving ? 'yes' : 'no'}`;
   paint();
 };
-// ?mqtt=wss://a,wss://b overrides the broker list (tests, own broker)
+// ?mqtt=wss://a,wss://b overrides the broker list (tests, own broker).
+// ?signaling=bc: BroadcastChannel instead of brokers, only for two tabs of one browser (dev).
+const signaling = new URLSearchParams(location.search).get('signaling') ?? 'mqtt';
 const brokers = () => new URLSearchParams(location.search).get('mqtt')?.split(',') ?? CFG.mqtt;
 
 $('secret').value = location.hash.slice(1) || store('secret') || newSecret();
@@ -67,7 +69,7 @@ async function connect() {
   store('secret', secret);
   const { room, sigKey } = await derive(secret);
   let inner;
-  if ($('mode').value === 'bc') {
+  if (signaling === 'bc') {
     inner = new BroadcastAdapter(`kinlink-${room}`);
     state.sig = 'signaling: bc';
   } else {
@@ -111,7 +113,6 @@ act('offer', () => {
 });
 // An invite link (#secret) means: be the Client. Connect and offer, no clicks needed.
 if (!isExt && location.hash.length > 1) {
-  $('mode').value = 'mqtt'; // an invite is always mqtt, whatever the browser restored in the select
   log('invite link: joining');
   connect().then(() => peer.offer()).catch((e) => log(`err: ${e.message}`));
 }
@@ -132,7 +133,7 @@ $('base').value = store('base') ?? (isExt ? PAGES_URL : location.href.split(/[?#
 $('base').onchange = () => store('base', $('base').value.trim());
 act('invite', async () => {
   const base = $('base').value.trim().split('#')[0];
-  if ($('mode').value !== 'mqtt') log('note: invite links only work in mode mqtt');
+  if (signaling !== 'mqtt') log('note: invite links only work with mqtt signaling');
   await navigator.clipboard.writeText(`${base}#${$('secret').value.trim()}`);
   log(`invite link copied: ${base}#...`);
 });

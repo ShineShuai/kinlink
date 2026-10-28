@@ -90,6 +90,12 @@ with sync_playwright() as p:
     check(True, "page, stylesheet and script came through the peer and ran")
     view.wait_for_function("document.body.dataset.api === 'api ok'")
     check(True, "fetch('/api') hook goes through the peer")
+    view.wait_for_function("document.body.dataset.worker === 'worker ok'")
+    check(True, "Worker script is served through the service worker")
+    view.wait_for_function("document.body.dataset.api2 === 'api ok'")
+    check(True, "fetch(location.origin + path) is mapped to the real site")
+    check(app.evaluate("navigator.serviceWorker.getRegistration().then(Boolean)"),
+          "a rendered page cannot unregister the service worker")
     hits = app.evaluate("hits")
     for u in ["https://site.test/s.css", "https://site.test/i.png", "https://other.test/px.png"]:
         check(u in hits, f"peer served {u}")
@@ -112,6 +118,14 @@ with sync_playwright() as p:
     check(view.url == f"{R}https://site.test/", f"redirect lands on final url: {view.url}")
     resp = view.goto(f"{R}site.test/next")
     check(view.url == f"{R}https://site.test/next", "scheme-less url is canonicalised")
+
+    app.evaluate("navigator.serviceWorker.getRegistration().then((r) => r.unregister())")
+    for _ in range(15):  # the app tab notices within its 5 s heartbeat
+        if app.evaluate("navigator.serviceWorker.getRegistration().then((r) => !!(r && r.active))"):
+            break
+        app.wait_for_timeout(1000)
+    resp = view.goto(f"{R}https://site.test/next")
+    check(resp.status == 200, "app tab re-registers a service worker that was removed anyway")
 
     cdp = ctx.new_cdp_session(app)
     cdp.send("ServiceWorker.enable")

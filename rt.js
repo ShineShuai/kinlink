@@ -12,7 +12,12 @@
     const s = String(u);
     if (s.startsWith(ROOT) || s.startsWith(origin + ROOT)) return s;
     try {
-      const a = new URL(s, real());
+      let a = new URL(s, real());
+      // Built from location.origin (frameworks do this): that is OUR origin, outside the
+      // rendered zone. Treat its path as a path of the real site.
+      if (a.origin === origin && !a.pathname.startsWith(ROOT)) {
+        a = new URL(a.pathname + a.search + a.hash, real());
+      }
       return /^https?:$/.test(a.protocol) ? ROOT + a.href : s;
     } catch { return s; }
   };
@@ -31,8 +36,17 @@
   }
   const Worker0 = window.Worker;
   window.Worker = class extends Worker0 { constructor(u, o) { super(px(u), o); } };
-  if (navigator.serviceWorker) { // a page's own Service Worker would bypass ours
-    navigator.serviceWorker.register = () => Promise.reject(new DOMException('blocked', 'SecurityError'));
+  // Pages share our origin and therefore our Service Worker. They must neither register their
+  // own (it would bypass ours) nor see or unregister ours (sites do clean-ups like that: after it,
+  // new navigations and workers under the rendered zone would fall through to the server: 404).
+  if (window.ServiceWorkerContainer) {
+    const C = ServiceWorkerContainer.prototype;
+    C.register = () => Promise.reject(new DOMException('blocked', 'SecurityError'));
+    C.getRegistrations = () => Promise.resolve([]);
+    C.getRegistration = () => Promise.resolve(undefined);
+  }
+  if (window.ServiceWorkerRegistration) {
+    ServiceWorkerRegistration.prototype.unregister = () => Promise.resolve(false);
   }
   Object.defineProperty(Document.prototype, 'cookie', { get: () => '', set() {} });
 

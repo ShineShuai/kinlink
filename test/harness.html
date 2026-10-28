@@ -22,7 +22,14 @@ const WEB = { // fake internet: url -> [status, content-type, body, final url]
     fetch('/api').then((r) => r.text()).then((t) => { document.body.dataset.api = t; });
     new Image().src = 'https://other.test/px.png';
     document.write('<img src="https://leak.test/x.png">'); // not hooked: only the CSP stops it
+    // what real sites do: clean up service workers, start workers, build URLs from location.origin
+    navigator.serviceWorker.getRegistrations().then((rs) => rs.forEach((r) => r.unregister()));
+    setTimeout(() => { // later, like real analytics workers
+      new Worker('/w.js').onmessage = (e) => { document.body.dataset.worker = e.data; };
+    }, 700);
+    fetch(location.origin + '/api').then((r) => r.text()).then((t) => { document.body.dataset.api2 = t; });
   `],
+  'https://site.test/w.js': [200, 'text/javascript', 'postMessage("worker ok")'],
   'https://site.test/old': [200, 'text/html', 'moved', 'https://site.test/'],
 };
 window.hits = [];
