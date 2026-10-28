@@ -4,6 +4,6 @@
   "version": "0.1.0",
   "description": "Dev build: a paired peer can fetch URLs through this browser.",
   "action": { "default_title": "Open Kinlink" },
-  "background": { "service_worker": "sw.js" },
+  "background": { "service_worker": "background.js" },
   "optional_host_permissions": ["<all_urls>"]
 }
