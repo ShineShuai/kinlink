@@ -7,12 +7,12 @@ export const CFG = {
     'stun:stun.miwifi.com:3478',
     'stun:stun.qq.com:3478',
   ],
-  wss: [ // [url, subprotocol?]
-    ['wss://broker-cn.emqx.io:8084/mqtt', 'mqtt'],
-    ['wss://broker.emqx.io:8084/mqtt', 'mqtt'],
-    ['wss://relay.damus.io'],
-    ['wss://nos.lol'],
+  mqtt: [ // signaling brokers; the app uses all that connect, so one blocked broker is fine
+    'wss://broker-cn.emqx.io:8084/mqtt',
+    'wss://broker.emqx.io:8084/mqtt',
+    'wss://test.mosquitto.org:8081',
   ],
+  wss: [], // [url, subprotocol?], filled below
   https: [ // opaque no-cors fetch: tests connect/TLS only
     'https://www.baidu.com/',
     'https://www.google.com/generate_204',
@@ -20,6 +20,8 @@ export const CFG = {
   ],
   wt: [], // QUIC needs an own WebTransport endpoint, e.g. 'https://host:4433/wt'
 };
+
+CFG.wss = [...CFG.mqtt.map((u) => [u, 'mqtt']), ['wss://relay.damus.io'], ['wss://nos.lol']];
 
 const gatherSrflx = (urls, ms, firstOnly) => new Promise((res, rej) => {
   const pc = new RTCPeerConnection({ iceServers: urls.map((u) => ({ urls: u })) });

@@ -1,6 +1,7 @@
 const CHUNK = 16 * 1024;
 const HIGH = 4 << 20;
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const gathered = (pc, ms = 5000) => new Promise((done) => {
   if (pc.iceGatheringState === 'complete') return done();
   const t = setTimeout(done, ms);
@@ -20,6 +21,7 @@ export class Peer {
     this.sig = sig;
     this.pc = new RTCPeerConnection({ iceServers });
     this.pc.onconnectionstatechange = () => this.onlog(`pc: ${this.pc.connectionState}`);
+    this.pc.oniceconnectionstatechange = () => this.onlog(`ice: ${this.pc.iceConnectionState}`);
     this.pc.ondatachannel = (e) => this.wire(e.channel);
     sig.addEventListener('message', (e) =>
       this.accept(e.data).catch((err) => this.onlog(`err: ${err.message}`)));
@@ -37,17 +39,36 @@ export class Peer {
   async describe(kind) { // 'createOffer' | 'createAnswer'
     await this.pc.setLocalDescription(await this.pc[kind]());
     await gathered(this.pc);
-    await this.sig.send(JSON.stringify(this.pc.localDescription));
+    this.sent = JSON.stringify(this.pc.localDescription);
+    await this.sig.send(this.sent);
   }
 
-  async offer() {
+  // Signaling is not retained: if the other side connects later, it would miss the offer.
+  // So the offer is re-sent until an answer arrives (order of clicks does not matter).
+  async offer(retries = 20, ms = 3000) {
     this.initiator = true;
     this.wire(this.pc.createDataChannel('kinlink'));
     await this.describe('createOffer');
+    for (let i = 1; i <= retries; i++) {
+      await sleep(ms);
+      if (this.pc.remoteDescription || this.pc.signalingState === 'closed') return;
+      this.onlog(`no answer yet (${i}/${retries}): other side connected, same secret?`);
+      await this.sig.send(this.sent).catch((e) => this.onlog(`err: ${e.message}`));
+    }
+    this.onlog('gave up: no answer');
   }
 
   async accept(text) {
     const desc = JSON.parse(text);
+    if (desc.type === 'offer') {
+      if (text === this.offerSeen) { // a retry: our answer may have been lost, send it again
+        if (this.sent) await this.sig.send(this.sent);
+        return;
+      }
+      this.offerSeen = text;
+    } else if (this.pc.signalingState !== 'have-local-offer') {
+      return; // duplicate answer
+    }
     await this.pc.setRemoteDescription(desc);
     if (desc.type === 'offer') await this.describe('createAnswer');
   }

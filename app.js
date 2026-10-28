@@ -1,4 +1,4 @@
-import { BroadcastAdapter } from './src/signaling.js';
+import { BroadcastAdapter, FanoutAdapter } from './src/signaling.js';
 import { MqttWssAdapter } from './src/mqtt.js';
 import { SealedAdapter, derive, newSecret } from './src/crypto.js';
 import { Peer } from './src/p2p.js';
@@ -27,12 +27,19 @@ if (!isExt) try { localStorage.removeItem('kinlink.secret'); } catch { /* storag
 const CSP = '<meta http-equiv="Content-Security-Policy" '
   + 'content="default-src \'none\'; style-src \'unsafe-inline\'; img-src data:">';
 const ORIGINS = { origins: ['<all_urls>'] };
-const BUILD = '0007';
+const BUILD = '0008';
 const PAGES_URL = 'https://shineshuai.github.io/kinlink/'; // hosted Client page
-let peer, api;
-const showPeer = (m) => {
-  $('status').textContent = `peer: build ${m.build}, serving ${m.serving ? 'yes' : 'no'}`;
+let peer, api, sig;
+const state = { sig: 'signaling: -', link: 'new', peer: 'peer: not connected' };
+const paint = () => {
+  $('status').textContent = `${state.sig} | link: ${state.link} | ${state.peer}`;
 };
+const showPeer = (m) => {
+  state.peer = `peer: build ${m.build}, serving ${m.serving ? 'yes' : 'no'}`;
+  paint();
+};
+// ?mqtt=wss://a,wss://b overrides the broker list (tests, own broker)
+const brokers = () => new URLSearchParams(location.search).get('mqtt')?.split(',') ?? CFG.mqtt;
 
 $('secret').value = location.hash.slice(1) || store('secret') || newSecret();
 $('new').onclick = () => { $('secret').value = newSecret(); };
@@ -47,25 +54,58 @@ $('host').onchange = async (e) => {
   api?.hello();
 };
 
-act('connect', async () => {
+async function connect() {
   if (!Peer.prototype.tx) throw new Error('src/p2p.js is outdated: apply all patches in order');
   const secret = $('secret').value.trim();
   store('secret', secret);
   const { room, sigKey } = await derive(secret);
-  const inner = $('mode').value === 'bc'
-    ? new BroadcastAdapter(`kinlink-${room}`)
-    : new MqttWssAdapter(CFG.wss[0][0], `kinlink/${room}`);
-  const sig = new SealedAdapter(inner, sigKey);
+  let inner;
+  if ($('mode').value === 'bc') {
+    inner = new BroadcastAdapter(`kinlink-${room}`);
+    state.sig = 'signaling: bc';
+  } else {
+    inner = new FanoutAdapter(brokers().map(
+      (u) => [new URL(u).host, new MqttWssAdapter(u, `kinlink/${room}`)]));
+    inner.onlog = log;
+    inner.addEventListener('state', () => { state.sig = `signaling: ${inner.status()}`; paint(); });
+    state.sig = 'signaling: connecting';
+  }
+  sig?.close().catch(() => {});
   peer?.pc.close();
+  sig = new SealedAdapter(inner, sigKey);
   peer = new Peer(sig, CFG.stun.slice(0, 4).map((urls) => ({ urls })));
   peer.onlog = log;
+  peer.pc.addEventListener('connectionstatechange', () => {
+    state.link = peer.pc.connectionState;
+    paint();
+  });
   api = attach(peer, {
     enabled: () => $('host').checked, onlog: log, build: BUILD, onhello: showPeer,
   });
-  await sig.open();
-  log(`build ${BUILD}, room ${room.slice(0, 8)}. Host waits; client clicks Offer.`);
+  state.link = 'new';
+  state.peer = 'peer: not connected';
+  paint();
+  try {
+    await sig.open();
+  } catch (e) {
+    peer.pc.close();
+    peer = api = undefined; // nothing to talk to: do not leave a half-connected state behind
+    state.sig = `signaling failed: ${e.message}`;
+    paint();
+    throw e;
+  }
+  log(`build ${BUILD}, room ${room.slice(0, 8)}. Host: wait. Client: Offer.`);
+}
+act('connect', connect);
+act('offer', () => {
+  if (!peer) throw new Error('Connect first');
+  return peer.offer();
 });
-act('offer', () => peer.offer());
+// An invite link (#secret) means: be the Client. Connect and offer, no clicks needed.
+if (!isExt && location.hash.length > 1 && $('mode').value === 'mqtt') {
+  log('invite link: joining');
+  connect().then(() => peer.offer()).catch((e) => log(`err: ${e.message}`));
+}
 const rendering = canRender();
 $('open').disabled = !rendering;
 if (rendering) startBridge(() => api, log).catch((e) => log(`render: ${e.message}`));

@@ -7,7 +7,10 @@ globalThis.MessageEvent ??= class extends Event {
 };
 
 class FakeWS {
-  constructor() { setTimeout(() => this.onopen(), 0); }
+  constructor(url) { // 'dead' hosts fail, 'hang' hosts never answer
+    if (url.includes('dead')) setTimeout(() => this.onerror(), 0);
+    else if (!url.includes('hang')) setTimeout(() => this.onopen(), 0);
+  }
   push(u8, cut = u8.length) { // deliver as two chunks to exercise reassembly
     for (const part of [u8.slice(0, cut), u8.slice(cut)]) {
       setTimeout(() => this.onmessage({ data: part.buffer }), 0);
@@ -32,6 +35,7 @@ globalThis.WebSocket = FakeWS;
 
 const { derive, newSecret, sealText, openText, SealedAdapter } = await import('../src/crypto.js');
 const { MqttWssAdapter } = await import('../src/mqtt.js');
+const { FanoutAdapter } = await import('../src/signaling.js');
 
 const secret = newSecret();
 const a = await derive(secret);
@@ -50,4 +54,26 @@ const got = new Promise((r) => m.addEventListener('message', (e) => r(e.data)));
 await m.send('x'.repeat(3000));
 assert.equal((await got).length, 3000);
 await m.close();
+
+// connect timeout
+await assert.rejects(new MqttWssAdapter('ws://hang', 't').open(20), /timeout/);
+
+// fan-out: one dead broker is fine, all dead is an error, status and logs say which
+const mq = (host) => [host, new MqttWssAdapter(`ws://${host}`, 'kinlink/room')];
+const fan = new FanoutAdapter([mq('dead1'), mq('good1'), mq('good2')]);
+const logs = [];
+fan.onlog = (l) => logs.push(l);
+await fan.open();
+await new Promise((r) => setTimeout(r, 10)); // second broker joins late
+assert.equal(fan.status(), '2/3 signaling servers');
+assert.ok(logs.some((l) => /dead1: unreachable/.test(l)), logs.join('|'));
+const heard = [];
+fan.addEventListener('message', (e) => heard.push(e.data));
+await fan.send('offer');
+await new Promise((r) => setTimeout(r, 10));
+assert.deepEqual(heard, ['offer', 'offer']); // duplicates via two brokers are expected
+const allDead = new FanoutAdapter([mq('dead1'), mq('dead2')]);
+await assert.rejects(allDead.open(), /no signaling server reachable/);
+await assert.rejects(allDead.send('x'), /no signaling server connected/);
+await fan.close();
 console.log('signaling ok');

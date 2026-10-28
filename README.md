@@ -12,12 +12,21 @@ The Client never contacts the target site.
    `manifest.json`. The app opens (later: puzzle icon > pin Kinlink).
 2. Host tab: mode `mqtt`, "New secret", tick "serve requests" (grant), Connect,
    "Copy invite link", send the link.
-3. Client: open the invite link (`.../kinlink/#<secret>`), mode `mqtt`, Connect, Offer.
-   The status line shows the peer's build and whether it serves.
-4. Log shows `dc: open`. Then either:
+3. Client: open the invite link. It connects and offers by itself, nothing to click. The offer is
+   re-sent for 60 s, so it does not matter which side is first.
+4. The status line shows `signaling: 2/3 signaling servers | link: connected | peer: build
+   0008, serving yes`. Then either:
    - "Open rendered": new tab at `.../kinlink/~/<url>`, a real page through the peer
      (hosted web page only; keep the app tab open). Typing `.../kinlink/~/example.com/` works too.
    - "Fetch via peer": script-free preview in this page (also works in the extension page).
+
+If it does not connect (the log says where it stops):
+- `signaling failed` / `0/3`: every broker is blocked or down. Open `diag.html?auto`; the broker
+  list is `CFG.mqtt` in `src/diag.js` (`?mqtt=wss://a,wss://b` overrides it per page).
+- Signaling ok, `no answer yet`: the other side is not connected, or uses another secret.
+- `ice: failed` / link `failed`: the two networks cannot reach each other directly
+  (needs a TURN/relay, not built yet).
+- Link `connected` but `no hello`: one side runs old code. Reload the extension and all tabs.
 
 One machine, offline: mode `bc` in two tabs of the same address (extension page or
 `python3 -m http.server 8000` > `http://localhost:8000/`). `bc` does not work across origins.
@@ -45,9 +54,9 @@ Local: `npm test`, `bash scripts/build-site.sh`,
 - `render-sw.js`, `rt.js`, `src/bridge.js`, `src/render.js`, `src/rewrite.js`: rendering layer.
 - `src/proxy.js`: request/response protocol, SSRF guard.
 - `src/p2p.js`: WebRTC peer. `src/crypto.js`: HKDF, AES-GCM, SealedAdapter.
-- `src/signaling.js`, `src/mqtt.js`: signaling adapters. `src/diag.js`: probes and endpoint list.
+- `src/signaling.js`, `src/mqtt.js`: signaling adapters; `FanoutAdapter` uses all brokers at once. `src/diag.js`: probes and endpoint list.
 - `manifest.json`, `background.js`: extension shell (opens `index.html`).
-- `test/*.mjs`: unit tests. `test/e2e.py`, `test/harness.html`: browser test. `scripts/`: build.
+- `test/*.mjs`: unit tests (fake broker, fake RTCPeerConnection). `test/e2e.py`, `test/harness.html`: browser test (rendering, and pairing through a fake broker). `scripts/`: build.
 
 ## Known gaps
 - GET only, no cookies (`document.cookie` is stubbed), no request bodies (forms must be GET).

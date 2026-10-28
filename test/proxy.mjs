@@ -52,4 +52,7 @@ await assert.rejects(old.fetch('https://example.com/'), /old code/);
 const off = pair(false);
 await tick();
 await assert.rejects(off.fetch('https://example.com/'), /not serving/);
+const down = mk();
+down.dc.readyState = 'connecting';
+await assert.rejects(attach(down).fetch('https://example.com/'), /not connected to a peer yet/);
 console.log('proxy ok');

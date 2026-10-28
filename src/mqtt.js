@@ -23,14 +23,19 @@ export class MqttWssAdapter extends SignalingAdapter {
     this.topic = topic;
   }
 
-  open() {
+  open(timeoutMs = 8000) {
     return new Promise((res, rej) => {
-      this.ready = { res, rej };
+      const t = setTimeout(() => { rej(new Error('timeout')); this.ws.close(); }, timeoutMs);
+      this.ready = {
+        res: () => { clearTimeout(t); res(); },
+        rej: (e) => { clearTimeout(t); rej(e); },
+      };
       const ws = (this.ws = new WebSocket(this.url, 'mqtt'));
       ws.binaryType = 'arraybuffer';
-      ws.onerror = () => rej(new Error('ws error'));
+      ws.onerror = () => this.ready.rej(new Error('unreachable'));
       ws.onclose = () => {
         clearInterval(this.keepalive);
+        this.ready.rej(new Error('closed'));
         this.dispatchEvent(new Event('close'));
       };
       ws.onmessage = (e) => this.parse(new Uint8Array(e.data));

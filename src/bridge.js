@@ -1,6 +1,7 @@
 // App-tab side of the rendering layer: registers the Service Worker and answers its
 // requests through the peer. Web page only: extension pages cannot register Service Workers.
-export const canRender = () => 'serviceWorker' in navigator && location.protocol.startsWith('http');
+export const canRender = () => 'serviceWorker' in navigator && location.protocol.startsWith('http')
+  && !globalThis.chrome?.runtime?.id;
 export const renderedUrl = (url) => new URL(`~/${url}`, new URL('.', location.href)).href;
 
 export async function startBridge(getApi, onlog = () => {}) {

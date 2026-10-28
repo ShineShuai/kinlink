@@ -86,6 +86,9 @@ export function attach(peer, opts = {}) {
   return {
     hello,
     fetch: (url, headers) => new Promise((ok, fail) => {
+      if (peer.dc?.readyState !== 'open') {
+        return fail(new Error('not connected to a peer yet: both sides Connect, one Offers (see log)'));
+      }
       if (!remote) return fail(new Error('no hello from peer: old code? reload extension + tabs'));
       if (!remote.serving) return fail(new Error('peer is not serving: tick "serve requests"'));
       const id = 2 * ++n + (peer.initiator ? 1 : 0); // initiator odd, other side even
