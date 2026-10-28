@@ -3,7 +3,7 @@
 import { render } from './src/render.js';
 
 const ROOT = new URL('./~/', self.registration.scope).pathname; // "/kinlink/~/"
-const SEND = ['accept', 'accept-language', 'range'];
+const SEND = ['accept', 'accept-language', 'range', 'content-type'];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let owner = null; // client id of the app tab; only a live owner can be replaced
 
@@ -23,7 +23,7 @@ async function findOwner() {
   return owner && self.clients.get(owner);
 }
 
-async function ask(url, headers) {
+async function ask(url, req) {
   const tab = await findOwner();
   if (!tab) throw new Error('no connected Kinlink app tab (keep it open)');
   return new Promise((ok, fail) => {
@@ -33,16 +33,22 @@ async function ask(url, headers) {
       clearTimeout(t);
       if (data.error) fail(new Error(data.error)); else ok(data);
     };
-    tab.postMessage({ type: 'req', url, headers }, [port2]);
+    tab.postMessage({ type: 'req', url, ...req }, [port2]);
   });
 }
 
 self.addEventListener('fetch', (e) => {
   const u = new URL(e.request.url);
   if (u.origin !== location.origin || !u.pathname.startsWith(ROOT)) return;
+  u.hash = ''; // fragments stay in the browser
+  const { method, referrer } = e.request;
   const headers = Object.fromEntries(
     SEND.map((k) => [k, e.request.headers.get(k)]).filter(([, v]) => v));
-  u.hash = ''; // fragments stay in the browser
-  const url = u.href.slice(u.origin.length + ROOT.length); // raw path + query, no fragment
-  e.respondWith(render({ url, method: e.request.method, headers }, ask, ROOT));
+  const url = u.href.slice(u.origin.length + ROOT.length); // raw path + query
+  const prefix = u.origin + ROOT; // the page that asked, as its real url
+  const referer = referrer.startsWith(prefix) ? referrer.slice(prefix.length) : undefined;
+  e.respondWith((async () => {
+    const body = method === 'POST' ? await e.request.arrayBuffer() : undefined;
+    return render({ url, method, headers, body, referer }, ask, ROOT);
+  })());
 });

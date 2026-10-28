@@ -5,6 +5,9 @@ import { Peer } from './src/p2p.js';
 import { attach } from './src/proxy.js';
 import { CFG } from './src/diag.js';
 import { canRender, renderedUrl, startBridge } from './src/bridge.js';
+import { Jar } from './src/cookies.js';
+import { browser } from './src/browse.js';
+import { exec as extExec } from './src/host-ext.js';
 
 const $ = (id) => document.getElementById(id);
 const log = (m) => {
@@ -27,9 +30,13 @@ if (!isExt) try { localStorage.removeItem('kinlink.secret'); } catch { /* storag
 const CSP = '<meta http-equiv="Content-Security-Policy" '
   + 'content="default-src \'none\'; style-src \'unsafe-inline\'; img-src data:">';
 const ORIGINS = { origins: ['<all_urls>'] };
-const BUILD = '0009';
+const BUILD = '0010';
 const PAGES_URL = 'https://shineshuai.github.io/kinlink/'; // hosted Client page
 let peer, api, sig;
+const jar = new Jar(); // cookies of the sites we browse, kept in this tab only
+const browse = () => api && browser(api, jar);
+// The extension host does single hops with Cookie/Referer/Origin; else plain fetch (see proxy.js).
+const hostExec = isExt && chrome.declarativeNetRequest && chrome.webRequest;
 const state = { sig: 'signaling: -', link: 'new', peer: 'peer: not connected' };
 const paint = () => {
   $('status').textContent = `${state.sig} | link: ${state.link} | ${state.peer}`;
@@ -81,6 +88,7 @@ async function connect() {
   });
   api = attach(peer, {
     enabled: () => $('host').checked, onlog: log, build: BUILD, onhello: showPeer,
+    exec: hostExec ? extExec : undefined,
   });
   state.link = 'new';
   state.peer = 'peer: not connected';
@@ -102,13 +110,14 @@ act('offer', () => {
   return peer.offer();
 });
 // An invite link (#secret) means: be the Client. Connect and offer, no clicks needed.
-if (!isExt && location.hash.length > 1 && $('mode').value === 'mqtt') {
+if (!isExt && location.hash.length > 1) {
+  $('mode').value = 'mqtt'; // an invite is always mqtt, whatever the browser restored in the select
   log('invite link: joining');
   connect().then(() => peer.offer()).catch((e) => log(`err: ${e.message}`));
 }
 const rendering = canRender();
 $('open').disabled = !rendering;
-if (rendering) startBridge(() => api, log).catch((e) => log(`render: ${e.message}`));
+if (rendering) startBridge(browse, log).catch((e) => log(`render: ${e.message}`));
 act('open', async () => {
   await navigator.serviceWorker.ready;
   window.open(renderedUrl($('url').value.trim()), '_blank', 'noopener');
@@ -119,15 +128,20 @@ act('copylog', async () => {
   log('log copied');
 });
 
+$('base').value = store('base') ?? (isExt ? PAGES_URL : location.href.split(/[?#]/)[0]);
+$('base').onchange = () => store('base', $('base').value.trim());
 act('invite', async () => {
-  const base = isExt ? PAGES_URL : location.href.split('#')[0];
+  const base = $('base').value.trim().split('#')[0];
+  if ($('mode').value !== 'mqtt') log('note: invite links only work in mode mqtt');
   await navigator.clipboard.writeText(`${base}#${$('secret').value.trim()}`);
-  log('invite link copied');
+  log(`invite link copied: ${base}#...`);
 });
 
 act('go', async () => {
   const t0 = performance.now();
-  const r = await api.fetch($('url').value.trim(), { accept: 'text/html,*/*' });
+  const b = browse();
+  if (!b) throw new Error('Connect first');
+  const r = await b.fetch($('url').value.trim(), { headers: { accept: 'text/html,*/*' } });
   const type = r.headers.find(([k]) => k === 'content-type')?.[1] ?? '';
   $('meta').textContent = `${r.status} ${r.url} ${type} ${r.body.size} B `
     + `${Math.round(performance.now() - t0)} ms`;

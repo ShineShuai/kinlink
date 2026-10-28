@@ -5,8 +5,10 @@
 <script type=module>
 import { startBridge } from './src/bridge.js';
 
-const PAGE = '<!doctype html><title>start</title><link rel=stylesheet href=/s.css>'
-  + '<img src=/i.png><script src=/a.js><\/script><a id=l href=/next>next</a>';
+const PAGE = `<!doctype html><title>start</title><link rel=stylesheet href=/s.css>
+<img src=/i.png><script src=/a.js><\/script><a id=l href=/next>next</a>
+<button id=b1 onclick="location.href='/next'">b1</button>
+<button id=b2 onclick="location.assign('https://site.test/next')">b2</button>`;
 const WEB = { // fake internet: url -> [status, content-type, body, final url]
   'https://site.test/': [200, 'text/html; charset=utf-8', PAGE],
   'https://site.test/next': [200, 'text/html', '<title>next</title><p id=n>second page</p>'],

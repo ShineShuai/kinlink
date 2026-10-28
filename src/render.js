@@ -20,16 +20,16 @@ function decode(buf, type) {
   try { return new TextDecoder(m?.[1] ?? 'utf-8').decode(buf); } catch { return new TextDecoder().decode(buf); }
 }
 
-// req: { url, method, headers } with url as typed after root. ask(url, headers) -> peer response
-// { status, url, headers: [[k, v]], body: ArrayBuffer }. root: e.g. "/kinlink/~/".
+// req: { url, method, headers, body, referer } with url as typed after root. ask(url, req) -> peer
+// response { status, url, headers: [[k, v]], body: ArrayBuffer }. root: e.g. "/kinlink/~/".
 export async function render(req, ask, root) {
-  if (req.method !== 'GET') return page(501, `${req.method} is not supported yet`);
+  if (!['GET', 'POST'].includes(req.method)) return page(501, `${req.method} is not supported`);
   let u;
   try { u = new URL(SCHEME.test(req.url) ? req.url : `https://${req.url}`); } catch { u = null; }
   if (!u || !/^https?:$/.test(u.protocol)) return page(400, `bad url: ${req.url}`);
   if (!SCHEME.test(req.url)) return redirect(root + u.href);
   let r;
-  try { r = await ask(u.href, req.headers); } catch (e) { return page(502, e.message); }
+  try { r = await ask(u.href, { method: req.method, headers: req.headers, body: req.body, referer: req.referer }); } catch (e) { return page(502, e.message); }
   if (new URL(r.url).href !== u.href) return redirect(root + r.url); // base for relative URLs
   const type = r.headers.find(([k]) => k === 'content-type')?.[1] ?? '';
   const headers = new Headers({ 'content-security-policy': CSP });

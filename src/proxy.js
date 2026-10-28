@@ -1,11 +1,26 @@
 // Wire format on the DataChannel (ordered, reliable), both directions:
-//   text "req:{id,url,headers}"                  ask the other side to fetch a URL
-//   text "res:{id,status,url,headers}"           response head
+//   text "req:{id,url,method,headers,cookie,referer,origin,body(base64)}"  fetch ONE hop (GET/POST)
+//   text "res:{id,status,url,headers,cookies,location}"  response head; redirects are not followed
 //   bin  [u32 id][<= 16 KiB body bytes]          response body frames
 //   text "fin:{id}" | "err:{id,message}"         end of response | failure
 const CHUNK = 16 * 1024 - 4;
 const MAX = 32 << 20;
-const ALLOW = new Set(['accept', 'accept-language', 'range']);
+const MAX_BODY = 150 * 1024; // a request is one DataChannel message (limit 256 KiB with base64)
+const ALLOW = new Set(['accept', 'accept-language', 'range', 'content-type']);
+const toB64 = (buf) => {
+  const u = new Uint8Array(buf);
+  let s = '';
+  for (let i = 0; i < u.length; i += 8192) s += String.fromCharCode(...u.subarray(i, i + 8192));
+  return btoa(s);
+};
+const fromB64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+
+// Default Host executor: plain fetch, follows redirects, no cookies. The extension replaces it
+// (src/host-ext.js) with one that does a single hop with Cookie/Referer/Origin and Set-Cookie.
+const defaultExec = async ({ url, method, headers, body }) => {
+  const res = await fetch(url, { method, headers, body, credentials: 'omit', cache: 'no-store' });
+  return { status: res.status, url: res.url || url, headers: [...res.headers], body: res.body };
+};
 
 // SSRF guard for the host side. Known gap: DNS names that resolve to private IPs.
 export function blocked(urlStr) {
@@ -25,10 +40,10 @@ export function blocked(urlStr) {
   return priv ? 'private ipv4' : null;
 }
 
-// Every peer can serve (host) and request (client). Returns { fetch(url, headers) }.
+// Every peer can serve (host) and request (client). Returns { fetch(url, headers, opts) }.
 export function attach(peer, opts = {}) {
   const { enabled = () => true, onlog = () => {}, onhello = () => {}, build = '?' } = opts;
-  const { helloMs = 500, helloMax = 20 } = opts;
+  const { helloMs = 500, helloMax = 20, exec = defaultExec } = opts;
   const pending = new Map();
   let n = 0;
   let remote = null; // peer's last hello
@@ -48,21 +63,29 @@ export function attach(peer, opts = {}) {
   };
 
   async function serve(r) {
-    const why = enabled() ? blocked(r.url) : 'host disabled';
+    const method = r.method ?? 'GET';
+    let why = blocked(r.url);
+    if (!['GET', 'POST'].includes(method)) why = 'method';
+    if (!enabled()) why = 'host disabled';
     if (why) {
       onlog(`deny ${r.url}: ${why}`);
       return say('err', { id: r.id, message: why });
     }
-    onlog(`GET ${r.url}`);
+    onlog(`${method} ${r.url}`);
     try {
       const headers = Object.fromEntries(
         Object.entries(r.headers ?? {}).filter(([k]) => ALLOW.has(k.toLowerCase())));
-      const res = await fetch(r.url, { headers, credentials: 'omit', cache: 'no-store' });
-      const final = res.url || r.url;
-      const why2 = blocked(final); // redirects are followed, so re-check the final target
+      const out = await exec({
+        url: r.url, method, headers, cookie: r.cookie, referer: r.referer, origin: r.origin,
+        body: r.body ? fromB64(r.body) : undefined,
+      });
+      const why2 = blocked(out.url); // a followed redirect (default executor) lands elsewhere
       if (why2) throw new Error(`redirect to ${why2}`);
-      say('res', { id: r.id, status: res.status, url: final, headers: [...res.headers] });
-      const rd = res.body?.getReader();
+      say('res', {
+        id: r.id, status: out.status, url: out.url, headers: out.headers,
+        cookies: out.setCookies, location: out.location,
+      });
+      const rd = out.body?.getReader();
       let total = 0;
       while (rd) {
         const { done, value } = await rd.read();
@@ -101,7 +124,8 @@ export function attach(peer, opts = {}) {
 
   return {
     hello,
-    fetch: (url, headers) => new Promise((ok, fail) => {
+    // opts: { method, body (ArrayBuffer), cookie, referer, origin }
+    fetch: (url, headers, opts = {}) => new Promise((ok, fail) => {
       if (peer.dc?.readyState !== 'open') {
         const link = peer.pc?.connectionState ?? 'none';
         return fail(new Error(`not connected to a peer yet (link: ${link}); see the log for ice/signaling`));
@@ -109,8 +133,10 @@ export function attach(peer, opts = {}) {
       if (!remote) return fail(new Error('no hello from peer: old code? reload extension + tabs'));
       if (!remote.serving) return fail(new Error('peer is not serving: tick "serve requests"'));
       const id = 2 * ++n + (peer.initiator ? 1 : 0); // initiator odd, other side even
+      const { body, ...rest } = opts;
+      if (body?.byteLength > MAX_BODY) return fail(new Error('request body too large'));
       pending.set(id, { chunks: [], ok, fail });
-      say('req', { id, url, headers });
+      say('req', { id, url, headers, ...rest, body: body?.byteLength ? toB64(body) : undefined });
       setTimeout(() => pending.delete(id) && fail(new Error('timeout')), 30000)?.unref?.();
     }),
   };

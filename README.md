@@ -15,7 +15,7 @@ The Client never contacts the target site.
 3. Client: open the invite link. It connects and offers by itself, nothing to click. The offer is
    re-sent for 60 s, so it does not matter which side is first.
 4. The status line shows `signaling: 2/3 signaling servers | link: connected | peer: build
-   0009, serving yes`. Then either:
+   0010, serving yes`. Then either:
    - "Open rendered": new tab at `.../kinlink/~/<url>`, a real page through the peer
      (hosted web page only; keep the app tab open). Typing `.../kinlink/~/example.com/` works too.
    - "Fetch via peer": script-free preview in this page (also works in the extension page).
@@ -23,7 +23,8 @@ The Client never contacts the target site.
 Logs: bottom of each app tab ("Log", the "Copy" button copies status and log). The Host's log
 is in the extension page. Extension errors: `chrome://extensions` > Kinlink > Errors.
 After updating files: `chrome://extensions` > reload button on the Kinlink card (re-reads the
-folder), then reload the open Kinlink tabs.
+folder), then reload the open Kinlink tabs. Since 0010 the extension asks for two more permissions
+(`webRequest`, `declarativeNetRequestWithHostAccess`); accept them if Chrome asks.
 
 If it does not connect (the log says where it stops):
 - `signaling failed` / `0/3`: every broker is blocked or down. Open `diag.html?auto`; the broker
@@ -39,7 +40,20 @@ If it does not connect (the log says where it stops):
 One machine, offline: mode `bc` in two tabs of the same address (extension page or
 `python3 -m http.server 8000` > `http://localhost:8000/`). `bc` does not work across origins.
 
+Invite link base: field above the status line (extension page default: the hosted page; set
+`http://localhost:8000/` to test with a local copy). The invite link always switches the
+Client to mode mqtt.
+
 Diagnostics: `.../kinlink/diag.html?auto` runs the probes on load; "Copy JSON" for results.
+
+## What the Client does like a browser (`src/browse.js`, `src/cookies.js`)
+The Host executes exactly one request hop and never follows redirects. The Client follows them
+hop by hop (max 10), keeps the cookie jar (memory of the app tab, lost on reload), sends
+Referer/Origin like a browser, and turns POST into GET after 303 (and 301/302). The extension
+sets Cookie/Referer/Origin per request with declarativeNetRequest session rules and reads
+Set-Cookie and Location with webRequest (`src/host-ext.js`), because fetch() can do neither.
+The Host never uses its own cookies (`credentials: omit`) and its own cookie jar stays clean.
+Each hop passes the Host's SSRF check. Request bodies up to 150 KiB, methods GET and POST.
 
 ## Rendering layer
 `render-sw.js` (Service Worker) answers `~/<url>` requests: it asks the app tab over a
@@ -49,7 +63,8 @@ response (`src/rewrite.js`: HTML and CSS URLs, charset to UTF-8, redirects, inje
 only our own origin, so anything the rewriting misses fails closed instead of leaking.
 
 ## CI and deploy
-`.github/workflows/ci.yml`: `test` (`npm test`) and `e2e` (`python3 test/e2e.py`, Chromium) run
+`.github/workflows/ci.yml`: `test` (`npm test`) and `e2e` (`python3 test/e2e.py` and
+`python3 test/e2e_ext.py`, Chromium) run
 on every push and PR. Only on `main`, and only if both pass, `build` assembles `site/`
 (`scripts/build-site.sh`) and `deploy` publishes it.
 One-time: repo Settings > Pages > Source: **GitHub Actions** (public repo on the free plan).
@@ -60,14 +75,20 @@ Local: `npm test`, `bash scripts/build-site.sh`,
 ## Files
 - `index.html`, `app.js`: pairing UI and the viewers. `diag.html`: probes, echo/throughput test.
 - `render-sw.js`, `rt.js`, `src/bridge.js`, `src/render.js`, `src/rewrite.js`: rendering layer.
-- `src/proxy.js`: request/response protocol, SSRF guard.
+- `src/proxy.js`: request/response protocol, SSRF guard. `src/browse.js`, `src/cookies.js`: Client
+  side redirects, cookies. `src/host-ext.js`: the extension's one-hop executor.
 - `src/p2p.js`: WebRTC peer. `src/crypto.js`: HKDF, AES-GCM, SealedAdapter.
 - `src/signaling.js`, `src/mqtt.js`: signaling adapters; `FanoutAdapter` uses all brokers at once. `src/diag.js`: probes and endpoint list.
 - `manifest.json`, `background.js`: extension shell (opens `index.html`).
-- `test/*.mjs`: unit tests (fake broker, fake RTCPeerConnection). `test/e2e.py`, `test/harness.html`: browser test (rendering, and pairing through a fake broker). `scripts/`: build.
+- `test/*.mjs`: unit tests (fake broker, fake RTCPeerConnection). `test/e2e.py` (+ `harness.html`): browser test of rendering and pairing through a fake broker.
+  `test/e2e_ext.py`: loads the real extension as Host and runs a cookie-consent flow. `scripts/`: build.
 
 ## Known gaps
-- GET only, no cookies (`document.cookie` is stubbed), no request bodies (forms must be GET).
+- Only GET and POST (body <= 150 KiB). `document.cookie` is stubbed: cookies set by scripts are
+  lost. Cookie jar: no SameSite, no public suffix list, memory only.
+- Sites with bot detection fail. Google's `/sorry` page (reCAPTCHA, "Invalid domain for site key")
+  is one: the reCAPTCHA script reads `location.hostname`, which is our host, not google.com. This
+  needs JS `location` fidelity (rewriting scripts), not built.
 - JS is not rewritten, only hooked at run time. Not covered: `location.hostname` and friends
   (scripts see our host), `document.write`, dynamic `srcset`/`<style>`, static or dynamic
   `import` of absolute URLs, WebSocket. JS-heavy sites (e.g. google.com) may stay broken.

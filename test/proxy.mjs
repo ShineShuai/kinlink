@@ -70,6 +70,38 @@ await assert.rejects(off.fetch('https://example.com/'), /not serving/);
   await new Promise((r) => setTimeout(r, 60));
   assert.equal((await c.fetch('https://example.com/')).status, 200);
 }
+// POST, cookies, referer/origin and the redirect hop all travel through the protocol
+{
+  const [X, Y] = [mk(), mk()];
+  X.initiator = true;
+  link(X, Y);
+  link(Y, X);
+  const seen = [];
+  const c = attach(X, { helloMs: 5 });
+  attach(Y, { helloMs: 5, exec: async (q) => { // the extension's one-hop executor looks like this
+    seen.push(q);
+    return { status: 303, url: q.url, headers: [['x', 'y']], body: null,
+      setCookies: ['a=1; Path=/'], location: '/next' };
+  } });
+  X.onopen();
+  Y.onopen();
+  await new Promise((r) => setTimeout(r, 30));
+  const r = await c.fetch('https://example.com/form', { 'content-type': 'text/plain', 'x-evil': '1' },
+    { method: 'POST', body: new Uint8Array([1, 2, 3]).buffer, cookie: 'k=v',
+      referer: 'https://example.com/', origin: 'https://example.com' });
+  assert.equal(r.status, 303);
+  assert.equal(r.location, '/next');
+  assert.deepEqual(r.cookies, ['a=1; Path=/']);
+  assert.equal(seen[0].method, 'POST');
+  assert.deepEqual([...seen[0].body], [1, 2, 3]);
+  assert.deepEqual([seen[0].cookie, seen[0].referer, seen[0].origin],
+    ['k=v', 'https://example.com/', 'https://example.com']);
+  assert.deepEqual(seen[0].headers, { 'content-type': 'text/plain' }, 'only allowed headers pass');
+  await assert.rejects(c.fetch('https://example.com/', {}, { method: 'PUT' }), /method/);
+  await assert.rejects(c.fetch('https://example.com/', {},
+    { method: 'POST', body: new ArrayBuffer(200 * 1024) }), /too large/);
+  await assert.rejects(c.fetch('http://127.0.0.1/', {}, { method: 'POST' }), /private/);
+}
 const down = mk();
 down.dc.readyState = 'connecting';
 await assert.rejects(attach(down).fetch('https://example.com/'), /not connected to a peer yet/);

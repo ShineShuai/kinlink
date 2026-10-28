@@ -54,7 +54,18 @@ assert.equal(r.body, null);
 r = await get('https://e.com/', async () => { throw new Error('deny <b>x</b>'); });
 assert.equal(r.status, 502);
 assert.ok(!(await text(r)).includes('<b>'));
-assert.equal((await get('https://e.com/', ok('', '', bytes('')), 'POST')).status, 501);
+// POST is passed on with body and referer; other methods are refused
+let got;
+r = await render({ url: 'https://e.com/form', method: 'POST', headers: { 'content-type': 'text/plain' },
+  body: bytes('a=1'), referer: 'https://e.com/page' }, async (url, req) => {
+  got = { url, req };
+  return { status: 200, url, headers: [['content-type', 'text/plain']], body: bytes('done') };
+}, R);
+assert.equal(await text(r), 'done');
+assert.equal(got.req.method, 'POST');
+assert.equal(new TextDecoder().decode(got.req.body), 'a=1');
+assert.deepEqual([got.req.referer, got.req.headers['content-type']], ['https://e.com/page', 'text/plain']);
+assert.equal((await get('https://e.com/', ok('', '', bytes('')), 'PUT')).status, 501);
 assert.equal((await get('ftp://e.com/', ok('', '', bytes('')))).status, 400);
 assert.equal((await get('', ok('', '', bytes('')))).status, 400);
 console.log('render ok');

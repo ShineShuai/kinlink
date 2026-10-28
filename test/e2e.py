@@ -1,57 +1,14 @@
 """Run: python3 test/e2e.py   (pip install playwright; playwright install chromium)
 Real Chromium, real Service Worker, fake peer: checks the rendering layer end to end."""
-import functools, http.server, pathlib, re, shutil, subprocess, tempfile, threading
+import re, shutil, sys
+import pathlib
 from playwright.sync_api import sync_playwright
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent
-tmp = pathlib.Path(tempfile.mkdtemp(prefix="kinlink-e2e-"))
-subprocess.run(["bash", str(ROOT / "scripts/build-site.sh"), str(tmp / "kinlink")], check=True,
-               capture_output=True)
-shutil.copy(ROOT / "test/harness.html", tmp / "kinlink/harness.html")
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from support import Broker, build_site, check
 
-
-class Quiet(http.server.SimpleHTTPRequestHandler):
-    def log_message(self, *args):
-        pass
-
-
-srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(Quiet, directory=str(tmp)))
-threading.Thread(target=srv.serve_forever, daemon=True).start()
-base = f"http://127.0.0.1:{srv.server_port}/kinlink"
+tmp, srv, base = build_site(extra=["harness.html"])
 R = f"{base}/~/"
-
-
-class Broker:
-    """Minimal MQTT 3.1.1 broker (QoS 0): enough for the signaling adapter."""
-
-    def __init__(self):
-        self.topics = {}
-
-    def handle(self, ws):
-        self.topics[ws] = None
-
-        def on_message(raw):
-            m = bytes(raw) if not isinstance(raw, bytes) else raw
-            j = 1
-            while m[j] & 128:
-                j += 1
-            body = m[j + 1:]
-            kind = m[0] >> 4
-            if kind == 1:  # CONNECT
-                ws.send(b"\x20\x02\x00\x00")
-            elif kind == 8:  # SUBSCRIBE
-                n = (body[2] << 8) | body[3]
-                self.topics[ws] = body[4:4 + n]
-                ws.send(b"\x90\x03" + body[:2] + b"\x00")
-            elif kind == 3:  # PUBLISH: forward to the other subscribers of the topic
-                n = (body[0] << 8) | body[1]
-                for other, topic in list(self.topics.items()):
-                    if other is not ws and topic == body[2:2 + n]:
-                        other.send(m)
-            elif kind == 12:  # PINGREQ
-                ws.send(b"\xd0\x00")
-
-        ws.on_message(on_message)
 
 
 EXT_STUB = ("window.chrome = {runtime: {id: 'kinlink-test'}, permissions: "
@@ -112,11 +69,6 @@ def pair(browser, client_first):
     ctx.close()
 
 
-def check(cond, msg):
-    assert cond, msg
-    print("ok  ", msg)
-
-
 with sync_playwright() as p:
     browser = p.chromium.launch(args=["--no-sandbox", "--allow-loopback-in-peer-connection",
                                       "--disable-features=WebRtcHideLocalIpsWithMdns"])
@@ -148,6 +100,13 @@ with sync_playwright() as p:
     view.click("#l")
     view.wait_for_selector("#n")
     check(view.url == f"{R}https://site.test/next", f"link click stays rendered: {view.url}")
+
+    for btn, what in (("#b1", "location.href = '/next' (root-relative, would 404 on our origin)"),
+                      ("#b2", "location.assign('https://site.test/next') (absolute)")):
+        view.goto(f"{R}https://site.test/")
+        view.click(btn)
+        view.wait_for_selector("#n")
+        check(view.url == f"{R}https://site.test/next", f"script navigation {what}")
 
     resp = view.goto(f"{R}https://site.test/old")
     check(view.url == f"{R}https://site.test/", f"redirect lands on final url: {view.url}")

@@ -19,7 +19,7 @@ jobs:
           node-version: 22
       - run: npm test
 
-  e2e: # real Chromium, real Service Worker, fake peer
+  e2e: # real Chromium: Service Worker rendering, pairing, and the real extension as Host
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -29,6 +29,7 @@ jobs:
       - run: pip install playwright==1.56.0
       - run: playwright install --with-deps chromium
       - run: python3 test/e2e.py
+      - run: python3 test/e2e_ext.py # the real extension as Host
 
   build: # only after all tests passed, only on main
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'

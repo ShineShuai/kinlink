@@ -15,12 +15,13 @@
   Client (any browser, also the hosted page): open the invite link, nothing else to click.
   Section 2 is used on the Client only.</p>
 <input id=secret size=26><button id=new>New secret</button>
-<select id=mode>
+<select id=mode autocomplete=off>
   <option value=mqtt>mqtt (public broker, any two machines)</option>
   <option value=bc>bc (two tabs of the same browser, offline)</option>
 </select>
 <button id=connect>Connect</button><button id=offer>Offer</button><button id=invite>Copy invite link</button>
 <label><input type=checkbox id=host> serve requests (extension page only)</label>
+<div>invite link base: <input id=base size=40></div>
 <div id=status>peer: not connected</div>
 
 <h3>2. Browse through the peer</h3>

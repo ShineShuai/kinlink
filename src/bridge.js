@@ -4,7 +4,8 @@ export const canRender = () => 'serviceWorker' in navigator && location.protocol
   && !globalThis.chrome?.runtime?.id;
 export const renderedUrl = (url) => new URL(`~/${url}`, new URL('.', location.href)).href;
 
-export async function startBridge(getApi, onlog = () => {}) {
+// getBrowse() -> { fetch(url, { method, headers, body, referer }) } (see browse.js) or undefined.
+export async function startBridge(getBrowse, onlog = () => {}) {
   const sw = navigator.serviceWorker;
   await sw.register('render-sw.js', { type: 'module' });
   const beat = async () => (await sw.ready).active?.postMessage({ type: 'beat' });
@@ -12,12 +13,13 @@ export async function startBridge(getApi, onlog = () => {}) {
     if (data?.type === 'who') return beat();
     if (data?.type !== 'req') return;
     try {
-      const api = getApi();
-      if (!api) throw new Error('app tab has no peer: Connect first');
-      const r = await api.fetch(data.url, data.headers);
-      const body = await r.body.arrayBuffer();
-      onlog(`render ${r.status} ${data.url} ${body.byteLength} B`);
-      port.postMessage({ status: r.status, url: r.url, headers: r.headers, body }, [body]);
+      const b = getBrowse();
+      if (!b) throw new Error('app tab has no peer: Connect first');
+      const { url, method, headers, referer } = data;
+      const r = await b.fetch(url, { method, headers, body: data.body, referer });
+      const bytes = await r.body.arrayBuffer();
+      onlog(`render ${r.status} ${url} ${bytes.byteLength} B`);
+      port.postMessage({ status: r.status, url: r.url, headers: r.headers, body: bytes }, [bytes]);
     } catch (e) {
       onlog(`render err ${data.url}: ${e.message}`);
       port.postMessage({ error: e.message });

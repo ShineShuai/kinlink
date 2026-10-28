@@ -68,11 +68,15 @@
   });
   hook(Element.prototype, 'insertAdjacentHTML', (g, t, [p, h]) => g.call(t, p, fix(h)));
 
-  // Script-driven navigation to a real URL (location.href = ...). Chromium only.
+  // Script-driven navigation (location.href = ..., assign, replace; Chromium only).
+  // Cross-origin: a real URL. Same origin but outside the rendered zone: a root-relative path
+  // of the real site ("/next" resolved against our origin), which would end in a 404 here.
   window.navigation?.addEventListener('navigate', (e) => {
     const to = new URL(e.destination.url);
-    if (!e.cancelable || to.origin === origin || !/^https?:$/.test(to.protocol)) return;
+    if (!e.cancelable || !/^https?:$/.test(to.protocol)) return;
+    const ours = to.origin === origin;
+    if (ours && to.pathname.startsWith(ROOT)) return;
     e.preventDefault();
-    location.href = px(to.href);
+    location.href = px(ours ? to.pathname + to.search + to.hash : to.href);
   });
 })();
