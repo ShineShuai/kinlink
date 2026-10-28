@@ -4,6 +4,7 @@ import { SealedAdapter, derive, newSecret } from './src/crypto.js';
 import { Peer } from './src/p2p.js';
 import { attach } from './src/proxy.js';
 import { CFG } from './src/diag.js';
+import { canRender, renderedUrl, startBridge } from './src/bridge.js';
 
 const $ = (id) => document.getElementById(id);
 const log = (m) => {
@@ -12,16 +13,21 @@ const log = (m) => {
 const act = (id, f) => {
   $(id).onclick = () => Promise.resolve().then(f).catch((e) => log(`err: ${e.message}`));
 };
-const store = (k, v) => { // namespaced: github.io origins are shared between projects
-  k = `kinlink.${k}`;
-  try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); }
-  catch { return null; }
-};
 const isExt = typeof chrome !== 'undefined' && !!chrome.runtime?.id;
+// Rendered pages share this origin: on the web the secret lives in this tab only.
+const store = (k, v) => {
+  k = `kinlink.${k}`;
+  try {
+    const kv = isExt ? localStorage : sessionStorage;
+    if (v === undefined) return kv.getItem(k);
+    kv.setItem(k, v);
+  } catch { return null; }
+};
+if (!isExt) try { localStorage.removeItem('kinlink.secret'); } catch { /* storage blocked */ }
 const CSP = '<meta http-equiv="Content-Security-Policy" '
   + 'content="default-src \'none\'; style-src \'unsafe-inline\'; img-src data:">';
 const ORIGINS = { origins: ['<all_urls>'] };
-const BUILD = '0006';
+const BUILD = '0007';
 const PAGES_URL = 'https://shineshuai.github.io/kinlink/'; // hosted Client page
 let peer, api;
 const showPeer = (m) => {
@@ -60,6 +66,14 @@ act('connect', async () => {
   log(`build ${BUILD}, room ${room.slice(0, 8)}. Host waits; client clicks Offer.`);
 });
 act('offer', () => peer.offer());
+const rendering = canRender();
+$('open').disabled = !rendering;
+if (rendering) startBridge(() => api, log).catch((e) => log(`render: ${e.message}`));
+act('open', async () => {
+  await navigator.serviceWorker.ready;
+  window.open(renderedUrl($('url').value.trim()), '_blank', 'noopener');
+});
+
 act('invite', async () => {
   const base = isExt ? PAGES_URL : location.href.split('#')[0];
   await navigator.clipboard.writeText(`${base}#${$('secret').value.trim()}`);
@@ -80,7 +94,7 @@ act('go', async () => {
     img.style.maxWidth = '100%';
     view.append(img);
   } else if (type.startsWith('text/html')) {
-    // No scripts, no subresources: a safe text preview. Real rendering needs the Service Worker rewriting layer.
+    // No scripts, no subresources: a safe text preview. "Open rendered" is the real view.
     const f = document.createElement('iframe');
     f.setAttribute('sandbox', '');
     f.style.cssText = 'width:100%;height:60vh;border:1px solid gray;background:#fff';

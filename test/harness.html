@@ -1,0 +1,34 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Kinlink e2e harness</title>
+<!-- Stands in for the app tab: same bridge, fake peer. Copied next to the site by test/e2e.py. -->
+<script type=module>
+import { startBridge } from './src/bridge.js';
+
+const PAGE = '<!doctype html><title>start</title><link rel=stylesheet href=/s.css>'
+  + '<img src=/i.png><script src=/a.js><\/script><a id=l href=/next>next</a>';
+const WEB = { // fake internet: url -> [status, content-type, body, final url]
+  'https://site.test/': [200, 'text/html; charset=utf-8', PAGE],
+  'https://site.test/next': [200, 'text/html', '<title>next</title><p id=n>second page</p>'],
+  'https://site.test/s.css': [200, 'text/css', 'body{background:url(/bg.png)}'],
+  'https://site.test/bg.png': [200, 'image/png', 'png'],
+  'https://site.test/i.png': [200, 'image/png', 'png'],
+  'https://site.test/api': [200, 'text/plain', 'api ok'],
+  'https://other.test/px.png': [200, 'image/png', 'png'],
+  'https://site.test/a.js': [200, 'text/javascript', `
+    document.title = 'js ran';
+    fetch('/api').then((r) => r.text()).then((t) => { document.body.dataset.api = t; });
+    new Image().src = 'https://other.test/px.png';
+    document.write('<img src="https://leak.test/x.png">'); // not hooked: only the CSP stops it
+  `],
+  'https://site.test/old': [200, 'text/html', 'moved', 'https://site.test/'],
+};
+window.hits = [];
+startBridge(() => ({
+  async fetch(url) {
+    hits.push(url);
+    const [status, type, body, final] = WEB[url] ?? [404, 'text/plain', 'nope'];
+    return { status, url: final ?? url, headers: [['content-type', type]], body: new Blob([body]) };
+  },
+}));
+</script>

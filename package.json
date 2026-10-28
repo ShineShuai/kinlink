@@ -1,0 +1,9 @@
+{
+  "name": "kinlink",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.mjs",
+    "build": "bash scripts/build-site.sh"
+  }
+}
