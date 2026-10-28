@@ -5,7 +5,7 @@ The Client never contacts the target site.
 
 - Client: any browser, no install. Hosted page: https://shineshuai.github.io/kinlink/
 - Host: Chrome/Edge/Brave with this extension (a plain page cannot fetch cross-origin).
-- China -> outside: the in-China user is the Client (no install), the outside user is the Host.
+- X -> outside: the in-X user is the Client (no install), the outside user is the Host.
 
 ## Deploy the Client page
 GitHub repo > Settings > Pages > Deploy from a branch > `main` / `/ (root)` (public repo).
