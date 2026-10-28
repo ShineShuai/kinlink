@@ -15,17 +15,25 @@ The Client never contacts the target site.
 3. Client: open the invite link. It connects and offers by itself, nothing to click. The offer is
    re-sent for 60 s, so it does not matter which side is first.
 4. The status line shows `signaling: 2/3 signaling servers | link: connected | peer: build
-   0008, serving yes`. Then either:
+   0009, serving yes`. Then either:
    - "Open rendered": new tab at `.../kinlink/~/<url>`, a real page through the peer
      (hosted web page only; keep the app tab open). Typing `.../kinlink/~/example.com/` works too.
    - "Fetch via peer": script-free preview in this page (also works in the extension page).
+
+Logs: bottom of each app tab ("Log", the "Copy" button copies status and log). The Host's log
+is in the extension page. Extension errors: `chrome://extensions` > Kinlink > Errors.
+After updating files: `chrome://extensions` > reload button on the Kinlink card (re-reads the
+folder), then reload the open Kinlink tabs.
 
 If it does not connect (the log says where it stops):
 - `signaling failed` / `0/3`: every broker is blocked or down. Open `diag.html?auto`; the broker
   list is `CFG.mqtt` in `src/diag.js` (`?mqtt=wss://a,wss://b` overrides it per page).
 - Signaling ok, `no answer yet`: the other side is not connected, or uses another secret.
-- `ice: failed` / link `failed`: the two networks cannot reach each other directly
-  (needs a TURN/relay, not built yet).
+- `ice: failed` / link `failed`: no direct path between the two browsers (needs a TURN/relay,
+  not built yet). The log then prints `ice local: host .., srflx ..`, the pair states and a
+  hint. `host 0` or `srflx 0` usually means a WebRTC privacy extension or policy. Both sides
+  behind one public IP (e.g. two tabs on one machine) often fails: Chrome hides local IPs
+  (mDNS) and many routers do not hairpin NAT. Test from two different networks.
 - Link `connected` but `no hello`: one side runs old code. Reload the extension and all tabs.
 
 One machine, offline: mode `bc` in two tabs of the same address (extension page or

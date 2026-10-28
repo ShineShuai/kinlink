@@ -27,7 +27,7 @@ if (!isExt) try { localStorage.removeItem('kinlink.secret'); } catch { /* storag
 const CSP = '<meta http-equiv="Content-Security-Policy" '
   + 'content="default-src \'none\'; style-src \'unsafe-inline\'; img-src data:">';
 const ORIGINS = { origins: ['<all_urls>'] };
-const BUILD = '0008';
+const BUILD = '0009';
 const PAGES_URL = 'https://shineshuai.github.io/kinlink/'; // hosted Client page
 let peer, api, sig;
 const state = { sig: 'signaling: -', link: 'new', peer: 'peer: not connected' };
@@ -112,6 +112,11 @@ if (rendering) startBridge(() => api, log).catch((e) => log(`render: ${e.message
 act('open', async () => {
   await navigator.serviceWorker.ready;
   window.open(renderedUrl($('url').value.trim()), '_blank', 'noopener');
+});
+
+act('copylog', async () => {
+  await navigator.clipboard.writeText(`${$('status').textContent}\n${$('log').textContent}`);
+  log('log copied');
 });
 
 act('invite', async () => {

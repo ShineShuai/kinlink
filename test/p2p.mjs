@@ -1,6 +1,6 @@
 // Run: node test/p2p.mjs   (fake RTCPeerConnection; offer/answer logic only)
 import assert from 'node:assert/strict';
-import { Peer } from '../src/p2p.js';
+import { Peer, candidates } from '../src/p2p.js';
 import { SignalingAdapter } from '../src/signaling.js';
 
 let count = 0;
@@ -11,6 +11,10 @@ class FakePC {
   localDescription = null;
   remoteCalls = 0;
   createDataChannel() { return {}; }
+  async getStats() {
+    return new Map([['a', { type: 'candidate-pair', state: 'failed' }],
+      ['b', { type: 'candidate-pair', state: 'failed' }], ['c', { type: 'local-candidate' }]]);
+  }
   async createOffer() { return { type: 'offer', sdp: `offer${++count}` }; }
   async createAnswer() { return { type: 'answer', sdp: `answer${++count}` }; }
   async setLocalDescription(d) {
@@ -81,5 +85,33 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   client.onlog = (l) => logs.push(l);
   await client.offer(2, 5);
   assert.ok(logs.some((l) => /gave up/.test(l)), logs.join('|'));
+}
+
+// ICE diagnostics
+const sdp = [
+  'a=candidate:1 1 udp 2122260223 a1b2c3.local 50000 typ host generation 0',
+  'a=candidate:2 1 udp 2122260223 192.168.1.5 50001 typ host',
+  'a=candidate:3 1 udp 1686052607 203.0.113.9 50001 typ srflx raddr 192.168.1.5 rport 50001',
+  'a=candidate:4 1 udp 41885439 198.51.100.1 3478 typ relay',
+].join('\r\n');
+assert.deepEqual(candidates(sdp),
+  { host: 2, mdns: 1, srflx: 1, relay: 1, srflxIps: ['203.0.113.9'] });
+assert.deepEqual(candidates(), { host: 0, mdns: 0, srflx: 0, relay: 0, srflxIps: [] });
+{
+  const [cw] = wires();
+  const p = new Peer(cw);
+  const logs = [];
+  p.onlog = (l) => logs.push(l);
+  p.pc.localDescription = { sdp };
+  p.pc.remoteDescription = { sdp };
+  await p.explain();
+  const all = logs.join('\n');
+  assert.match(all, /ice local: host 2 \(1 mDNS\), srflx 1, relay 1 \| remote: host 2/);
+  assert.match(all, /"failed":2/);
+  assert.match(all, /same machine\/LAN/);
+  p.pc.localDescription = { sdp: '' };
+  logs.length = 0;
+  await p.explain();
+  assert.match(logs.join('\n'), /no STUN answer/);
 }
 console.log('p2p ok');

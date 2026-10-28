@@ -28,13 +28,24 @@ export function blocked(urlStr) {
 // Every peer can serve (host) and request (client). Returns { fetch(url, headers) }.
 export function attach(peer, opts = {}) {
   const { enabled = () => true, onlog = () => {}, onhello = () => {}, build = '?' } = opts;
+  const { helloMs = 500, helloMax = 20 } = opts;
   const pending = new Map();
   let n = 0;
   let remote = null; // peer's last hello
   const say = (op, m) => peer.dc.send(`${op}:${JSON.stringify(m)}`);
   // Handshake: lets each side fail fast when the other runs old code or is not serving.
-  const hello = () => peer.dc?.readyState === 'open' && say('hello', { build, serving: enabled() });
-  peer.onopen = hello;
+  const hello = (reply = false) => peer.dc?.readyState === 'open'
+    && say('hello', { build, serving: enabled(), reply });
+  // A hello sent while the other side's channel is still opening can get lost: repeat it until
+  // the other side's hello arrives. Replies (reply: true) are not answered again.
+  peer.onopen = () => {
+    let tries = 0;
+    hello();
+    const t = setInterval(() => {
+      if (remote || ++tries > helloMax || peer.dc?.readyState !== 'open') clearInterval(t); else hello();
+    }, helloMs);
+    t.unref?.();
+  };
 
   async function serve(r) {
     const why = enabled() ? blocked(r.url) : 'host disabled';
@@ -73,7 +84,12 @@ export function attach(peer, opts = {}) {
 
   peer.onctl = (op, arg) => {
     const m = JSON.parse(arg);
-    if (op === 'hello') { remote = m; onhello(m); return; }
+    if (op === 'hello') {
+      remote = m;
+      onhello(m);
+      if (!m.reply) hello(true); // the sender may not have heard us yet
+      return;
+    }
     if (op === 'req') return void serve(m).catch(onlog);
     const p = pending.get(m.id);
     if (!p) return;
@@ -87,7 +103,8 @@ export function attach(peer, opts = {}) {
     hello,
     fetch: (url, headers) => new Promise((ok, fail) => {
       if (peer.dc?.readyState !== 'open') {
-        return fail(new Error('not connected to a peer yet: both sides Connect, one Offers (see log)'));
+        const link = peer.pc?.connectionState ?? 'none';
+        return fail(new Error(`not connected to a peer yet (link: ${link}); see the log for ice/signaling`));
       }
       if (!remote) return fail(new Error('no hello from peer: old code? reload extension + tabs'));
       if (!remote.serving) return fail(new Error('peer is not serving: tick "serve requests"'));

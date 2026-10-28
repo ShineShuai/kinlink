@@ -28,8 +28,14 @@ for (const f of files.filter((x) => /\.(html|js)$/.test(x))) {
     assert.ok(existsSync(target), `${relative(out, f)} references missing ${r}`);
   }
 }
-for (const must of ['index.html', 'diag.html', 'app.js', 'rt.js', 'render-sw.js', '.nojekyll']) {
+for (const must of ['index.html', 'diag.html', 'app.js', 'diag-app.js', 'rt.js', 'render-sw.js', '.nojekyll']) {
   assert.ok(existsSync(join(out, must)), `site lacks ${must}`);
+}
+// Extension pages forbid inline scripts and inline handlers (CSP script-src 'self').
+for (const f of files.filter((x) => x.endsWith('.html'))) {
+  const html = readFileSync(f, 'utf8');
+  assert.ok(!/<script(?![^>]*\bsrc=)[^>]*>/i.test(html), `${relative(out, f)}: inline <script>`);
+  assert.ok(!/<[a-z][^>]*\son[a-z]+\s*=/i.test(html), `${relative(out, f)}: inline event handler`);
 }
 for (const bad of ['manifest.json', 'background.js', 'test']) {
   assert.ok(!existsSync(join(out, bad)), `site must not contain ${bad}`);

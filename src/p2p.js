@@ -10,6 +10,19 @@ const gathered = (pc, ms = 5000) => new Promise((done) => {
   });
 });
 
+// Counts the ICE candidates in an SDP: host (mDNS ones counted separately), srflx, relay.
+export function candidates(sdp = '') {
+  const c = { host: 0, mdns: 0, srflx: 0, relay: 0, srflxIps: [] };
+  for (const m of sdp.matchAll(/^a=candidate:\S+ \d+ \S+ \d+ (\S+) \d+ typ (\w+)/gm)) {
+    const [, ip, type] = m;
+    if (type === 'host') { c.host++; if (ip.endsWith('.local')) c.mdns++; }
+    else if (type === 'srflx') { c.srflx++; c.srflxIps.push(ip); }
+    else if (type === 'relay') c.relay++;
+  }
+  return c;
+}
+const fmt = (c) => `host ${c.host}${c.mdns ? ` (${c.mdns} mDNS)` : ''}, srflx ${c.srflx}, relay ${c.relay}`;
+
 // Symmetric peer. Non-trickle: one SDP message each way over any SignalingAdapter.
 export class Peer {
   onlog = () => {};
@@ -20,11 +33,37 @@ export class Peer {
   constructor(sig, iceServers = []) {
     this.sig = sig;
     this.pc = new RTCPeerConnection({ iceServers });
-    this.pc.onconnectionstatechange = () => this.onlog(`pc: ${this.pc.connectionState}`);
+    this.pc.onconnectionstatechange = () => {
+      const st = this.pc.connectionState;
+      this.onlog(`pc: ${st}`);
+      clearTimeout(this.slow);
+      if (st === 'connecting') this.slow = setTimeout(() => this.explain(), 12000);
+      if (st === 'failed') this.explain();
+    };
     this.pc.oniceconnectionstatechange = () => this.onlog(`ice: ${this.pc.iceConnectionState}`);
     this.pc.ondatachannel = (e) => this.wire(e.channel);
     sig.addEventListener('message', (e) =>
       this.accept(e.data).catch((err) => this.onlog(`err: ${err.message}`)));
+  }
+
+  // Why is there no connection? Logs candidate counts, pair states and a likely reason.
+  async explain() {
+    const l = candidates(this.pc.localDescription?.sdp);
+    const r = candidates(this.pc.remoteDescription?.sdp);
+    this.onlog(`ice local: ${fmt(l)} | remote: ${fmt(r)}`);
+    const pairs = {};
+    try {
+      for (const s of (await this.pc.getStats()).values()) {
+        if (s.type === 'candidate-pair') pairs[s.state] = (pairs[s.state] ?? 0) + 1;
+      }
+    } catch { /* stats unavailable */ }
+    this.onlog(`ice pairs: ${JSON.stringify(pairs)}`);
+    if (!l.srflx && !l.relay) this.onlog('hint: no STUN answer: UDP blocked, or a WebRTC privacy extension/policy?');
+    if (!l.host) this.onlog('hint: no local host candidates: hidden by a WebRTC privacy policy/extension');
+    if (l.srflxIps.some((ip) => r.srflxIps.includes(ip))) {
+      this.onlog('hint: both sides share one public IP (same machine/LAN). Direct paths are hidden'
+        + ' (mDNS) and the router would need NAT hairpinning: test from two different networks');
+    }
   }
 
   wire(dc) {

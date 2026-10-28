@@ -52,6 +52,24 @@ await assert.rejects(old.fetch('https://example.com/'), /old code/);
 const off = pair(false);
 await tick();
 await assert.rejects(off.fetch('https://example.com/'), /not serving/);
+// the first hellos can get lost while the other side's channel is still opening: retries + replies
+{
+  const [X, Y] = [mk(), mk()];
+  X.initiator = true;
+  const raw = (d) => (typeof d === 'string' ? d : d.buffer.slice(d.byteOffset, d.byteOffset + d.byteLength));
+  let lost = 0;
+  X.dc.send = (d) => queueMicrotask(() => Y.onmsg(raw(d)));
+  Y.dc.send = (d) => {
+    if (typeof d === 'string' && d.startsWith('hello:') && lost++ < 2) return;
+    queueMicrotask(() => X.onmsg(raw(d)));
+  };
+  const c = attach(X, { helloMs: 5 });
+  attach(Y, { helloMs: 5 });
+  X.onopen();
+  Y.onopen();
+  await new Promise((r) => setTimeout(r, 60));
+  assert.equal((await c.fetch('https://example.com/')).status, 200);
+}
 const down = mk();
 down.dc.readyState = 'connecting';
 await assert.rejects(attach(down).fetch('https://example.com/'), /not connected to a peer yet/);
