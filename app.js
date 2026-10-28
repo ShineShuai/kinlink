@@ -12,7 +12,8 @@ const log = (m) => {
 const act = (id, f) => {
   $(id).onclick = () => Promise.resolve().then(f).catch((e) => log(`err: ${e.message}`));
 };
-const store = (k, v) => {
+const store = (k, v) => { // namespaced: github.io origins are shared between projects
+  k = `kinlink.${k}`;
   try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); }
   catch { return null; }
 };
@@ -20,7 +21,8 @@ const isExt = typeof chrome !== 'undefined' && !!chrome.runtime?.id;
 const CSP = '<meta http-equiv="Content-Security-Policy" '
   + 'content="default-src \'none\'; style-src \'unsafe-inline\'; img-src data:">';
 const ORIGINS = { origins: ['<all_urls>'] };
-const BUILD = '0005';
+const BUILD = '0006';
+const PAGES_URL = 'https://shineshuai.github.io/kinlink/'; // hosted Client page
 let peer, api;
 const showPeer = (m) => {
   $('status').textContent = `peer: build ${m.build}, serving ${m.serving ? 'yes' : 'no'}`;
@@ -58,6 +60,11 @@ act('connect', async () => {
   log(`build ${BUILD}, room ${room.slice(0, 8)}. Host waits; client clicks Offer.`);
 });
 act('offer', () => peer.offer());
+act('invite', async () => {
+  const base = isExt ? PAGES_URL : location.href.split('#')[0];
+  await navigator.clipboard.writeText(`${base}#${$('secret').value.trim()}`);
+  log('invite link copied');
+});
 
 act('go', async () => {
   const t0 = performance.now();
@@ -73,7 +80,7 @@ act('go', async () => {
     img.style.maxWidth = '100%';
     view.append(img);
   } else if (type.startsWith('text/html')) {
-    // No scripts, no subresources: a safe text preview. Real rendering is M3.
+    // No scripts, no subresources: a safe text preview. Real rendering needs the Service Worker rewriting layer.
     const f = document.createElement('iframe');
     f.setAttribute('sandbox', '');
     f.style.cssText = 'width:100%;height:60vh;border:1px solid gray;background:#fff';

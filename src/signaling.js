@@ -25,4 +25,4 @@ export class BroadcastAdapter extends SignalingAdapter {
   async close() { this.ch.close(); }
 }
 
-// M1: WssAdapter, MqttWssAdapter, NostrAdapter implement the same three methods.
+// Planned: WssAdapter (own relay), NostrAdapter; same three methods as above.

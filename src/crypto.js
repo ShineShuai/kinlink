@@ -21,7 +21,7 @@ export async function derive(secret) {
   const room = new Uint8Array(await crypto.subtle.deriveBits(p('kinlink/room'), ikm, 128));
   const sigKey = await crypto.subtle.deriveKey(
     p('kinlink/signaling'), ikm, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
-  return { room: hex(room), sigKey }; // M1b: per-direction session keys
+  return { room: hex(room), sigKey }; // TODO: per-direction session keys
 }
 
 // Random 96-bit IV: fine for a handful of signaling messages per key.

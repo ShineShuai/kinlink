@@ -1,4 +1,4 @@
-// Endpoints are candidates, not a verified list: measuring them is the point of M0.
+// Endpoints are candidates, not a verified list: measuring them is the point of this page.
 export const CFG = {
   stun: [
     'stun:stun.l.google.com:19302',

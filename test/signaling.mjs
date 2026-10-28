@@ -1,4 +1,4 @@
-// Run: node test/m1.mjs   (no network; fake broker echoes publishes from a "foreign" id)
+// Run: node test/signaling.mjs   (no network; fake broker echoes publishes from a "foreign" id)
 import assert from 'node:assert/strict';
 
 globalThis.crypto ??= (await import('node:crypto')).webcrypto;
@@ -50,4 +50,4 @@ const got = new Promise((r) => m.addEventListener('message', (e) => r(e.data)));
 await m.send('x'.repeat(3000));
 assert.equal((await got).length, 3000);
 await m.close();
-console.log('m1 ok');
+console.log('signaling ok');

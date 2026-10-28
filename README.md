@@ -3,30 +3,41 @@
 Two browsers share one secret. The Host browser (extension) fetches URLs for the Client.
 The Client never contacts the target site.
 
-## Quick test (Chrome/Edge/Brave, one machine, no server)
-1. `chrome://extensions` > Developer mode > Load unpacked > select the folder that contains
-   `manifest.json`. A tab with `app.html` opens. Later: puzzle icon > pin Kinlink > click it,
-   or open `chrome-extension://<ID>/app.html` (ID is on the extension card).
-2. Tab 1 (Host): mode `bc`, "New secret", tick "serve requests" (grant), Connect.
-3. Tab 2 (Client): open the same `chrome-extension://<ID>/app.html` address (copy it from
-   tab 1). Same secret, mode `bc`, Connect, then Offer. Use "Fetch via peer" in this tab
-   only. The status line shows the peer's build and whether it serves.
-4. Log shows `dc: open`. Click "Fetch via peer" with `https://example.com/`.
+- Client: any browser, no install. Hosted page: https://shineshuai.github.io/kinlink/
+- Host: Chrome/Edge/Brave with this extension (a plain page cannot fetch cross-origin).
+- China -> outside: the in-China user is the Client (no install), the outside user is the Host.
 
-Two machines: mode `mqtt` on both. The Client can be any browser: run
-`python3 -m http.server 8000` inside the folder with `app.html`, open
-`http://localhost:8000/app.html`. A 404 there means the server runs in the wrong folder.
+## Deploy the Client page
+GitHub repo > Settings > Pages > Deploy from a branch > `main` / `/ (root)` (public repo).
+The repo root is served as is: `index.html` (app), `diag.html` (network diagnostics).
+
+## Test (two machines)
+1. Host: `chrome://extensions` > Developer mode > Load unpacked > the folder with
+   `manifest.json`. The app opens (later: puzzle icon > pin Kinlink).
+2. Host tab: mode `mqtt`, "New secret", tick "serve requests" (grant), Connect,
+   "Copy invite link", send the link.
+3. Client: open the invite link (`.../kinlink/#<secret>`), mode `mqtt`, Connect, Offer.
+   The status line shows the peer's build and whether it serves.
+4. Log shows `dc: open`. "Fetch via peer" with `https://example.com/`.
+
+One machine, offline: mode `bc` in two tabs of the same address (extension page or
+`python3 -m http.server 8000` > `http://localhost:8000/`). `bc` does not work across origins.
+
+Diagnostics: `.../kinlink/diag.html?auto` runs the probes on load; "Copy JSON" for results.
 
 ## Files
-- `app.html`, `app.js`: pairing UI and the fetch viewer.
+- `index.html`, `app.js`: pairing UI and the fetch viewer.
+- `diag.html`: reachability probes (STUN/WSS/HTTPS/NAT) and P2P echo/throughput test.
 - `src/proxy.js`: request/response protocol, SSRF guard.
 - `src/p2p.js`: WebRTC peer. `src/crypto.js`: HKDF, AES-GCM, SealedAdapter.
-- `src/signaling.js`, `src/mqtt.js`: signaling adapters.
-- `index.html`, `src/diag.js`: M0 probes and echo/throughput test.
-- `test/*.mjs`: `node test/m1.mjs && node test/proxy.mjs`.
+- `src/signaling.js`, `src/mqtt.js`: signaling adapters. `src/diag.js`: probes and endpoint list.
+- `manifest.json`, `sw.js`: extension shell (opens `index.html`).
+- `test/*.mjs`: `node test/signaling.mjs && node test/proxy.mjs`.
 
 ## Known gaps
-- GET only, no cookies, no request bodies, HTML shown as a script-free preview.
+- GET only, no cookies, no request bodies. HTML is a script-free, subresource-free preview,
+  so JS-only pages (e.g. google.com) show their `<noscript>` fallback. Needs the
+  Service Worker rewriting layer.
 - DNS names resolving to private IPs are not blocked; redirects are checked after the fact.
 - Host tab must stay open. Signaling needs both sides online (no retained messages).
 - No WSS relay fallback yet.
