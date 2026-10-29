@@ -6,7 +6,7 @@ import http.server, json, pathlib, re, shutil, sys, tempfile, threading
 from playwright.sync_api import sync_playwright
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from support import ROOT, Broker, build_site, check
+from support import ROOT, Broker, WsServer, build_site, check
 
 LOG = []  # what the fake site saw: (method, path, cookie, origin, referer, body)
 
@@ -75,11 +75,20 @@ with sync_playwright() as p:
     status = "document.getElementById('status').textContent"
     q = "?mqtt=wss://good.test/mqtt"
 
+    def status_has(page, *needles):
+        """Polled: extension pages forbid the eval behind wait_for_function."""
+        for _ in range(150):
+            text = page.evaluate(status)
+            if all(n in text for n in needles):
+                return
+            page.wait_for_timeout(200)
+        raise AssertionError(f"status never had {needles}: {text}\n{page.inner_text('#log')}")
+
     host = ctx.new_page()
     host.goto(f"chrome-extension://{ext_id}/index.html{q}")
     secret = host.input_value("#secret")
     host.click("#connect")
-    host.wait_for_function(f"{status}.includes('1/1 signaling')")
+    status_has(host, "1/1 signaling")
     client = ctx.new_page()
     client.goto(f"{base}/index.html{q}#{secret}")
     try:
@@ -115,7 +124,52 @@ with sync_playwright() as p:
     check("ok=1" in (LOG[-1][2] or ""), f"cookie from Set-Cookie replayed by the client: {LOG[-1][2]}")
     check(not any(c["name"] == "ok" for c in ctx.cookies()),
           "the host's own cookie jar stayed clean")
+
+    # Background host: the offscreen document serves while no Kinlink tab is open, and takes a
+    # new client after the first one left. Needs a real WebSocket broker (offscreen documents are
+    # not covered by route_web_socket).
+    for pg in ctx.pages:  # also the tab the extension opens by itself on install
+        pg.close()
+    wsb = WsServer(Broker())
+    mq = f"?mqtt=ws://127.0.0.1:{wsb.port}/mqtt"
+    ui = ctx.new_page()
+    ui.goto(f"chrome-extension://{ext_id}/index.html{mq}")
+    secret2 = ui.input_value("#secret")
+    ui.check("#bg")
+    status_has(ui, "background host", "1/1 signaling")
+    n_docs = sw.evaluate("chrome.runtime.getContexts({contextTypes: ['OFFSCREEN_DOCUMENT']})"
+                         ".then((c) => c.length)")
+    check(n_docs == 1, "background host: offscreen document is running")
+    ui.close()
+    check(not ctx.pages, "background host: no tab is open at all")
+
+    def pair_and_browse(n):
+        pg = ctx.new_page()
+        pg.goto(f"{base}/index.html{mq}#{secret2}")
+        try:
+            pg.wait_for_function(f"{status}.includes('serving yes')")
+        except Exception:
+            print(f"--- client {n}: {pg.evaluate(status)}\n{pg.inner_text('#log')}")
+            raise
+        pg.fill("#url", "http://site.test/consent")
+        with ctx.expect_page() as pop:
+            pg.click("#open")
+        try:
+            pop.value.wait_for_selector("#agree")
+        except Exception:
+            print(f"--- client {n}: {pg.evaluate(status)}\n{pg.inner_text('#log')}")
+            print(f"--- view: {pop.value.url} {pop.value.content()[:300]}")
+            raise
+        pop.value.close()
+        return pg
+
+    first = pair_and_browse(1)
+    check(True, "background host: client 1 paired and browsed with no host tab")
+    first.close()
+    second = pair_and_browse(2)
+    check(True, "background host: client 2 paired after client 1 left (session restarted)")
     ctx.close()
+    wsb.close()
 srv.shutdown()
 site.shutdown()
 print("e2e_ext ok")

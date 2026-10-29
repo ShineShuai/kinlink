@@ -3,8 +3,20 @@
   "name": "Kinlink (dev)",
   "version": "0.1.0",
   "description": "Dev build: a paired peer can fetch URLs through this browser.",
-  "action": { "default_title": "Open Kinlink" },
-  "background": { "service_worker": "background.js" },
-  "permissions": ["declarativeNetRequestWithHostAccess", "webRequest"],
-  "optional_host_permissions": ["<all_urls>"]
+  "action": {
+    "default_title": "Open Kinlink"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "permissions": [
+    "declarativeNetRequestWithHostAccess",
+    "webRequest",
+    "offscreen",
+    "storage"
+  ],
+  "optional_host_permissions": [
+    "<all_urls>"
+  ]
 }

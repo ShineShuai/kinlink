@@ -3,6 +3,7 @@
 //  - declarativeNetRequest session rules set Cookie/Referer/Origin for exactly this URL,
 //  - webRequest.onHeadersReceived reports status, Set-Cookie and Location of the hop.
 // The Client keeps the cookie jar and follows redirects (src/browse.js).
+// Runs in the service worker only (background.js); pages reach it through src/ext-port.js.
 let nextRule = 1;
 const taps = new Map(); // "METHOD url" -> [{ status, setCookies, location }]
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -39,7 +40,8 @@ async function takeTap(key) {
   return null;
 }
 
-export async function exec({ url, method = 'GET', headers = {}, body, cookie, referer, origin }) {
+export async function exec(req) {
+  const { url, method = 'GET', headers = {}, body, cookie, referer, origin, signal } = req;
   ensureTap();
   const id = nextRule++;
   const requestHeaders = Object.entries({ cookie, referer, origin }).filter(([, v]) => v)
@@ -54,7 +56,7 @@ export async function exec({ url, method = 'GET', headers = {}, body, cookie, re
   }
   try {
     const res = await fetch(url, {
-      method, headers, body, credentials: 'omit', cache: 'no-store', redirect: 'manual',
+      method, headers, body, signal, credentials: 'omit', cache: 'no-store', redirect: 'manual',
     });
     const tap = await takeTap(`${method} ${url}`);
     const redirect = res.type === 'opaqueredirect';

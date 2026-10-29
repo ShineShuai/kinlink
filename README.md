@@ -15,7 +15,7 @@ The Client never contacts the target site.
 3. Client: open the invite link. It connects and offers by itself, nothing to click. The offer is
    re-sent for 60 s, so it does not matter which side is first.
 4. The status line shows `signaling: 2/3 signaling servers | link: connected | peer: build
-   0012, serving yes`. Then either:
+   0013, serving yes`. Then either:
    - "Open rendered": new tab at `.../kinlink/~/<url>`, a real page through the peer
      (hosted web page only; keep the app tab open). Typing `.../kinlink/~/example.com/` works too.
    - "Fetch via peer": script-free preview in this page (also works in the extension page).
@@ -51,6 +51,18 @@ PASS/WARN/FAIL per site and a screenshot. `python3 test/corpus.py https://my.sit
 own list. This is the measurement for "is rewriting good enough?".
 
 Diagnostics: `.../kinlink/diag.html?auto` runs the probes on load; "Copy JSON" for results.
+
+## Background Host (`background.js`, `host.html`, `host.js`)
+Host tab: tick "serve in background" (grants the host permission). An offscreen document (reason
+WEB_RTC) then runs the Host with no tab open; the tab can be closed. It survives browser restarts
+(`onStartup`). `src/supervise.js` reopens the session when the link or channel is gone, all
+brokers are gone, or a new client offers (one client at a time: a new one replaces the old one).
+The app tab then only shows status and log (message `bgstat`); untick to stop. The one-hop
+executor runs in the service worker (`src/ext-port.js`: a Port, bodies as base64 chunks); the
+app tab, when it is the Host, uses it too. Extension permissions since 0013: `offscreen`,
+`storage` (the secret is kept in `chrome.storage.local`, unencrypted, like the one in
+localStorage before). Open the `?mqtt=wss://..` override in the app tab to give the background
+Host other brokers.
 
 ## Relay fallback (`src/relay.js`)
 If WebRTC finds no path (CGNAT, same NAT, UDP blocked), the same protocol runs over the signaling
@@ -96,9 +108,12 @@ Local: `npm test`, `bash scripts/build-site.sh`,
 - `src/p2p.js`: WebRTC peer. `src/relay.js`: broker relay channel and fallback trigger.
   `src/crypto.js`: HKDF, AES-GCM, SealedAdapter.
 - `src/signaling.js`, `src/mqtt.js`: signaling adapters; `FanoutAdapter` uses all brokers at once. `src/diag.js`: probes and endpoint list.
-- `manifest.json`, `background.js`: extension shell (opens `index.html`).
+- `manifest.json`, `background.js`: extension shell (opens `index.html`), executor port, offscreen
+  control. `host.html`, `host.js`: background Host. `src/session.js`: one pairing session (used by
+  `app.js` and `host.js`). `src/supervise.js`, `src/ext-port.js`: see above.
 - `test/*.mjs`: unit tests (fake broker, fake RTCPeerConnection, lossy medium for `relay.mjs`). `test/e2e.py` (+ `harness.html`): browser test of rendering and pairing through a fake broker, also with the relay forced.
-  `test/e2e_ext.py`: loads the real extension as Host and runs a cookie-consent flow.
+  `test/e2e_ext.py`: loads the real extension as Host, runs a cookie-consent flow and the
+  background Host (no tab open, second client after the first left; real local WebSocket broker).
   `test/corpus.py`: the site corpus (manual, needs internet). `scripts/`: build.
 
 ## Known gaps
@@ -118,7 +133,10 @@ Local: `npm test`, `bash scripts/build-site.sh`,
 - Script-driven `location.href = ...` is caught only in Chromium (Navigation API).
 - Extension pages cannot register Service Workers: rendering is for the hosted page only.
 - DNS names resolving to private IPs are not blocked; redirects are checked after the fact.
-- Host tab must stay open. Signaling needs both sides online (no retained messages).
+- Without background mode the Host tab must stay open. Background mode is tested in Chromium
+  with the real extension, but not over days: offscreen document lifetime in real Chrome and
+  the browser-restart path are unverified. Signaling needs both sides online (no retained
+  messages). Only the Host's Chrome profile must be running.
 - Relay: throughput on the real public brokers is not measured (their rate and size limits are
   unknown); a request times out after 30 s, so big bodies fail on it. No switch back to a direct
   path that comes up late. Brokers see room id, timing and volume. A malicious broker can replay

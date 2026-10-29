@@ -1,14 +1,11 @@
-import { BroadcastAdapter, FanoutAdapter } from './src/signaling.js';
-import { MqttWssAdapter } from './src/mqtt.js';
-import { SealedAdapter, derive, newSecret } from './src/crypto.js';
+import { newSecret } from './src/crypto.js';
 import { Peer } from './src/p2p.js';
-import { relayFallback } from './src/relay.js';
-import { attach } from './src/proxy.js';
+import { BUILD, openSession } from './src/session.js';
 import { CFG } from './src/diag.js';
 import { canRender, renderedUrl, startBridge } from './src/bridge.js';
 import { Jar } from './src/cookies.js';
 import { browser } from './src/browse.js';
-import { exec as extExec } from './src/host-ext.js';
+import { execViaPort } from './src/ext-port.js';
 
 const $ = (id) => document.getElementById(id);
 const log = (m) => {
@@ -31,13 +28,13 @@ if (!isExt) try { localStorage.removeItem('kinlink.secret'); } catch { /* storag
 const CSP = '<meta http-equiv="Content-Security-Policy" '
   + 'content="default-src \'none\'; style-src \'unsafe-inline\'; img-src data:">';
 const ORIGINS = { origins: ['<all_urls>'] };
-const BUILD = '0012';
 const PAGES_URL = 'https://shineshuai.github.io/kinlink/'; // hosted Client page
-let peer, api, sig, relay;
+let session, peer, api;
 const jar = new Jar(); // cookies of the sites we browse, kept in this tab only
 const browse = () => api && browser(api, jar);
-// The extension host does single hops with Cookie/Referer/Origin; else plain fetch (see proxy.js).
-const hostExec = isExt && chrome.declarativeNetRequest && chrome.webRequest;
+// The extension host does single hops with Cookie/Referer/Origin (in its service worker, see
+// ext-port.js); else plain fetch (see proxy.js).
+const hostExec = isExt && !!chrome.runtime.connect;
 const state = { sig: 'signaling: -', link: 'new', peer: 'peer: not connected' };
 const paint = () => {
   $('status').textContent = `${state.sig} | link: ${state.link} | ${state.peer}`;
@@ -53,8 +50,6 @@ const brokers = () => new URLSearchParams(location.search).get('mqtt')?.split(',
 // ?relay=<ms>: start the broker relay after that long without a direct path (default 15000,
 // 0 = at once, for tests). The relay is slow: it only carries traffic if WebRTC finds no path.
 const relayAfter = Number(new URLSearchParams(location.search).get('relay') ?? 15000);
-const linkState = () => (peer.dc?.relay && peer.dc.readyState === 'open'
-  ? 'relay' : peer.pc.connectionState);
 
 $('secret').value = location.hash.slice(1) || store('secret') || newSecret();
 $('new').onclick = () => { $('secret').value = newSecret(); };
@@ -69,54 +64,71 @@ $('host').onchange = async (e) => {
   api?.hello();
 };
 
+// Background Host (extension page only): an offscreen document serves while no tab is open
+// (background.js, host.js). This tab then only shows its status and log.
+const bgCap = isExt && !!chrome.storage?.local;
+$('bg').disabled = !bgCap;
+const bgShow = (r) => {
+  if (r?.status) $('status').textContent = r.status;
+  if (r?.log !== undefined) $('log').textContent = r.log ? `${r.log}\n` : '';
+};
+const bgUi = (on) => {
+  $('bg').checked = on;
+  for (const id of ['connect', 'offer', 'new']) $(id).disabled = on;
+  if (on) chrome.runtime.sendMessage({ kl: 'who' }).then(bgShow, () => {});
+};
+if (bgCap) {
+  chrome.storage.local.get('bg').then(({ bg }) => {
+    if (!bg?.on) return;
+    $('secret').value = bg.secret;
+    bgUi(true);
+  });
+  chrome.runtime.onMessage.addListener((m) => {
+    if (m?.kl !== 'bgstat' || !$('bg').checked) return;
+    bgShow({ status: m.status });
+    if (m.line) $('log').textContent += `${m.line}\n`;
+  });
+}
+$('bg').onchange = async (e) => {
+  const on = e.target.checked;
+  try {
+    if (on && !(await chrome.permissions.request(ORIGINS))) throw new Error('permission denied');
+    const secret = $('secret').value.trim();
+    const q = new URLSearchParams(location.search).get('mqtt')?.split(',');
+    const r = await chrome.runtime.sendMessage({ kl: 'bg', on, secret, brokers: q });
+    if (r?.error) throw new Error(r.error);
+    if (on) {
+      store('secret', secret);
+      session?.stop();
+      session = peer = api = undefined;
+      $('log').textContent = '';
+    }
+    bgUi(on);
+  } catch (err) {
+    e.target.checked = !on;
+    log(`err: ${err.message}`);
+  }
+};
+
 async function connect() {
   if (!Peer.prototype.tx) throw new Error('src/p2p.js is outdated: apply all patches in order');
   const secret = $('secret').value.trim();
   store('secret', secret);
-  const { room, sigKey, relayKey } = await derive(secret);
-  let inner;
-  if (signaling === 'bc') {
-    inner = new BroadcastAdapter(`kinlink-${room}`);
-    state.sig = 'signaling: bc';
-  } else {
-    inner = new FanoutAdapter(brokers().map(
-      (u) => [new URL(u).host, new MqttWssAdapter(u, `kinlink/${room}`)]));
-    inner.onlog = log;
-    inner.addEventListener('state', () => { state.sig = `signaling: ${inner.status()}`; paint(); });
-    state.sig = 'signaling: connecting';
-  }
-  sig?.close().catch(() => {});
-  relay?.stop();
-  peer?.pc.close();
-  sig = new SealedAdapter(inner, sigKey);
-  peer = new Peer(sig, CFG.stun.slice(0, 4).map((urls) => ({ urls })));
-  peer.onlog = log;
-  peer.pc.addEventListener('connectionstatechange', () => {
-    state.link = linkState();
-    paint();
+  session?.stop();
+  session = peer = api = undefined;
+  session = await openSession({
+    secret,
+    brokers: brokers(),
+    stun: CFG.stun.slice(0, 4),
+    signaling,
+    relayAfter,
+    enabled: () => $('host').checked,
+    exec: hostExec ? execViaPort : undefined,
+    onlog: log,
+    onhello: showPeer,
+    onstate: (p) => { Object.assign(state, p); paint(); },
   });
-  relay = relayFallback(peer, inner, relayKey, { after: relayAfter, onlog: log });
-  for (const ev of ['open', 'close']) {
-    relay.chan.addEventListener(ev, () => { state.link = linkState(); paint(); });
-  }
-  api = attach(peer, {
-    enabled: () => $('host').checked, onlog: log, build: BUILD, onhello: showPeer,
-    exec: hostExec ? extExec : undefined,
-  });
-  state.link = 'new';
-  state.peer = 'peer: not connected';
-  paint();
-  try {
-    await sig.open();
-  } catch (e) {
-    relay.stop();
-    peer.pc.close();
-    peer = api = undefined; // nothing to talk to: do not leave a half-connected state behind
-    state.sig = `signaling failed: ${e.message}`;
-    paint();
-    throw e;
-  }
-  log(`build ${BUILD}, room ${room.slice(0, 8)}. Host: wait. Client: Offer.`);
+  ({ peer, api } = session);
 }
 act('connect', connect);
 act('offer', () => {

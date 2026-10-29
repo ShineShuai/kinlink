@@ -7,13 +7,13 @@ const CHUNK = 16 * 1024 - 4;
 const MAX = 32 << 20;
 const MAX_BODY = 150 * 1024; // a request is one DataChannel message (limit 256 KiB with base64)
 const ALLOW = new Set(['accept', 'accept-language', 'range', 'content-type']);
-const toB64 = (buf) => {
+export const toB64 = (buf) => {
   const u = new Uint8Array(buf);
   let s = '';
   for (let i = 0; i < u.length; i += 8192) s += String.fromCharCode(...u.subarray(i, i + 8192));
   return btoa(s);
 };
-const fromB64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+export const fromB64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 
 // Default Host executor: plain fetch, follows redirects, no cookies. The extension replaces it
 // (src/host-ext.js) with one that does a single hop with Cookie/Referer/Origin and Set-Cookie.
