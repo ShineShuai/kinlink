@@ -30,9 +30,9 @@ export class Peer {
   rx = 0;
   initiator = false;
 
-  constructor(sig, iceServers = []) {
+  constructor(sig, iceServers = [], config = {}) {
     this.sig = sig;
-    this.pc = new RTCPeerConnection({ iceServers });
+    this.pc = new RTCPeerConnection({ iceServers, ...config });
     this.pc.onconnectionstatechange = () => {
       const st = this.pc.connectionState;
       this.onlog(`pc: ${st}`);
@@ -66,15 +66,16 @@ export class Peer {
     }
   }
 
-  // A relay channel (src/relay.js) stays the sending channel once chosen: a direct channel that
-  // opens late is wired for receiving only (switching mid-response would reorder frames).
+  // A relay channel (src/relay.js) stays this.dc once chosen. A direct channel that opens late is
+  // handed to it (adopt): it takes over sending at a safe moment, see RelayChannel.
   wire(dc) {
     const keep = this.dc?.relay && this.dc.readyState !== 'closed' && !dc.relay;
-    if (!keep) this.dc = dc;
+    if (!keep) this.dc = dc; else this.dc.adopt(dc);
     dc.binaryType = 'arraybuffer';
     dc.bufferedAmountLowThreshold = HIGH / 4;
     dc.onopen = () => {
-      this.onlog(`dc: open${dc.relay ? ' (relay)' : ''}${keep ? ' (not used)' : ''}`);
+      const tag = dc.relay ? ' (relay)' : keep ? ' (late, adopted)' : '';
+      this.onlog(`dc: open${tag}`);
       if (!keep) this.onopen?.();
     };
     dc.onclose = () => this.onlog(`dc: close${dc.relay ? ' (relay)' : ''}`);

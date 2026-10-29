@@ -47,9 +47,12 @@ const showPeer = (m) => {
 // ?signaling=bc: BroadcastChannel instead of brokers, only for two tabs of one browser (dev).
 const signaling = new URLSearchParams(location.search).get('signaling') ?? 'mqtt';
 const brokers = () => new URLSearchParams(location.search).get('mqtt')?.split(',') ?? CFG.mqtt;
-// ?relay=<ms>: start the broker relay after that long without a direct path (default 15000,
-// 0 = at once, for tests). The relay is slow: it only carries traffic if WebRTC finds no path.
-const relayAfter = Number(new URLSearchParams(location.search).get('relay') ?? 15000);
+// ?relay=<ms>: start the broker relay after that long without a direct path (default 8000,
+// 0 = at once, for tests). The relay is slow; a direct path that comes up later takes over.
+const relayAfter = Number(new URLSearchParams(location.search).get('relay') ?? 8000);
+// ?ice=relay: no direct path at all (iceTransportPolicy relay without TURN), for tests.
+const rtc = new URLSearchParams(location.search).get('ice') === 'relay'
+  ? { iceTransportPolicy: 'relay' } : undefined;
 
 $('secret').value = location.hash.slice(1) || store('secret') || newSecret();
 $('new').onclick = () => { $('secret').value = newSecret(); };
@@ -122,6 +125,7 @@ async function connect() {
     stun: CFG.stun.slice(0, 4),
     signaling,
     relayAfter,
+    rtc,
     enabled: () => $('host').checked,
     exec: hostExec ? execViaPort : undefined,
     onlog: log,

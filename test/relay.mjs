@@ -153,7 +153,7 @@ for (const bFirst of [false, true]) {
   b.close();
 }
 
-// relayFallback: triggers, wake-up by the peer, late direct channel does not take over.
+// relayFallback: triggers, wake-up by the peer, a late direct channel is handed to the relay.
 class FakePC extends EventTarget {
   connectionState = 'new';
   iceGatheringState = 'complete';
@@ -179,7 +179,7 @@ const peerOn = () => Object.assign(new Peer(new SignalingAdapter()), { onlog() {
   assert.ok(fa.chan.active && pa.dc === fa.chan, logs.join('|'));
   await until(() => fb.chan.active && pb.dc === fb.chan && pa.dc.readyState === 'open');
   assert.ok(logs.some((l) => /^b relay: peer started it/.test(l)), logs.join('|'));
-  // a direct channel that opens late is wired but not used for sending
+  // a direct channel that opens late is wired and adopted, not made peer.dc
   const late = {};
   pa.wire(late);
   assert.equal(pa.dc, fa.chan);
@@ -205,6 +205,54 @@ const peerOn = () => Object.assign(new Peer(new SignalingAdapter()), { onlog() {
   assert.equal(seen[1], 140000);
   fa.stop();
   fb.stop();
+}
+
+// Adoption: a direct channel that opens late takes over sending only when every relay frame is
+// acked (so nothing can arrive late and reorder), receiving works on both, and sending falls
+// back to the relay when it closes.
+{
+  class Direct extends EventTarget {
+    readyState = 'connecting';
+    bufferedAmount = 0;
+    sent = 0;
+    constructor(onmsg) { super(); this.onmsg = onmsg; }
+    send(m) { this.sent++; setTimeout(() => this.onmsg(m), 1); }
+  }
+  const [ma, mb] = medium(10, 0.2);
+  const a = mk(ma);
+  const b = mk(mb);
+  b.onwake = () => b.activate();
+  const got = [];
+  b.onmessage = (e) => got.push(e.data);
+  const d = new Direct((m) => got.push(m));
+  const switches = [];
+  a.addEventListener('switch', () => switches.push(a.useAlt));
+  a.activate();
+  await until(() => a.readyState === 'open' && b.readyState === 'open');
+  a.adopt(d);
+  for (let i = 0; i < 10; i++) a.send(`m${i}`); // relay frames in flight
+  d.readyState = 'open';
+  a.send('m10'); // direct is open, but the relay is not drained: this one must go via the relay
+  assert.equal(a.useAlt, false);
+  assert.equal(d.sent, 0);
+  await until(() => got.length === 11 && !a.flight.size && !a.queue.length);
+  assert.deepEqual(got, Array.from({ length: 11 }, (_, i) => `m${i}`));
+  for (let i = 11; i < 30; i++) a.send(`m${i}`); // drained: direct from now on
+  assert.equal(a.useAlt, true);
+  assert.equal(d.sent, 19);
+  d.bufferedAmount = 123;
+  assert.equal(a.bufferedAmount, 123);
+  await until(() => got.length === 30);
+  assert.deepEqual(got, Array.from({ length: 30 }, (_, i) => `m${i}`));
+  d.readyState = 'closed'; // the direct path dies: back to the relay
+  d.dispatchEvent(new Event('close'));
+  assert.equal(a.useAlt, false);
+  a.send('m30');
+  await until(() => got.length === 31);
+  assert.equal(got[30], 'm30');
+  assert.deepEqual(switches, [true, false]);
+  a.close();
+  b.close();
 }
 
 // Peer starts the relay first (its OPEN reaches a side whose own timer has not fired).

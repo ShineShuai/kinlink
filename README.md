@@ -15,7 +15,7 @@ The Client never contacts the target site.
 3. Client: open the invite link. It connects and offers by itself, nothing to click. The offer is
    re-sent for 60 s, so it does not matter which side is first.
 4. The status line shows `signaling: 2/3 signaling servers | link: connected | peer: build
-   0013, serving yes`. Then either:
+   0014, serving yes`. Then either:
    - "Open rendered": new tab at `.../kinlink/~/<url>`, a real page through the peer
      (hosted web page only; keep the app tab open). Typing `.../kinlink/~/example.com/` works too.
    - "Fetch via peer": script-free preview in this page (also works in the extension page).
@@ -30,7 +30,7 @@ If it does not connect (the log says where it stops):
 - `signaling failed` / `0/3`: every broker is blocked or down. Open `diag.html?auto`; the broker
   list is `CFG.mqtt` in `src/diag.js` (`?mqtt=wss://a,wss://b` overrides it per page).
 - Signaling ok, `no answer yet`: the other side is not connected, or uses another secret.
-- `ice: failed` / link `failed`: no direct path between the two browsers. After 15 s (or at once
+- `ice: failed` / link `failed`: no direct path between the two browsers. After 8 s (or at once
   on `failed`) both sides switch to the broker relay: status `link: relay`, slow but it works. The
   log prints `relay: ..` and, before that, `ice local: host .., srflx ..`, the pair states and a
   hint. `host 0` or `srflx 0` usually means a WebRTC privacy extension or policy. Both sides
@@ -69,10 +69,14 @@ If WebRTC finds no path (CGNAT, same NAT, UDP blocked), the same protocol runs o
 brokers: frames sealed with a separate HKDF key, a small ARQ (sequence numbers, cumulative acks,
 16-frame window, retransmit with backoff) makes the lossy, duplicating QoS 0 medium reliable and
 ordered. `RelayChannel` looks like an RTCDataChannel to `Peer`/`proxy.js`, nothing above it changes.
-Start: ICE `failed`, or `connecting` for 15 s (`?relay=<ms>` changes it, `?relay=0` forces it, for
-tests), or the peer's OPEN frame arrives (then this side joins). Once chosen it stays until
-reconnect: a direct channel that opens later is wired for receiving only. Every frame goes to all
-connected brokers (3x traffic, no single point of failure). Expect tens of KB/s and 100s of ms.
+Start: ICE `failed`, or `connecting` for 8 s (`?relay=<ms>` changes it, `?relay=0` forces it, and
+`?ice=relay` blocks the direct path, both for tests), or the peer's OPEN frame arrives (then this
+side joins). The relay stays `peer.dc`. A direct channel that comes up later is adopted: it takes
+over sending as soon as every relay frame is acked (nothing can then arrive late, so no reordering),
+and sending falls back to the relay if it closes. Status shows `link: connected` after the switch.
+It happens at the next message after a pause, not in the middle of a long download. Every relay
+frame goes to all connected brokers (3x traffic, no single point of failure). Expect tens of KB/s
+and 100s of ms.
 
 ## What the Client does like a browser (`src/browse.js`, `src/cookies.js`)
 The Host executes exactly one request hop and never follows redirects. The Client follows them
@@ -138,7 +142,6 @@ Local: `npm test`, `bash scripts/build-site.sh`,
   the browser-restart path are unverified. Signaling needs both sides online (no retained
   messages). Only the Host's Chrome profile must be running.
 - Relay: throughput on the real public brokers is not measured (their rate and size limits are
-  unknown); a request times out after 30 s, so big bodies fail on it. No switch back to a direct
-  path that comes up late. Brokers see room id, timing and volume. A malicious broker can replay
+  unknown); a request times out after 30 s, so big bodies fail on it. Brokers see room id, timing and volume. A malicious broker can replay
   old frames of an earlier session (needs per-session keys). No own WSS/TURN relay yet.
 - Bodies are buffered (32 MiB max), no streaming.

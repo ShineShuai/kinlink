@@ -23,9 +23,10 @@ def serve_fake_site(route):
                   headers={"access-control-allow-origin": "*"})  # the real Host has host_permissions
 
 
-def pair(browser, client_first, relay=False):
+def pair(browser, client_first, relay=None):
     """Host page (extension stubbed) and Client page (invite link) over a fake broker.
-    relay: ?relay=0 on both pages, so the frames travel over the broker, not the data channel."""
+    relay: "only" = ?relay=0&ice=relay on both pages, no direct path: frames travel over the
+    broker. "then-direct" = ?relay=0 only: starts on the relay, the direct path takes over."""
     ctx = browser.new_context()
     ctx.set_default_timeout(45000)
     ctx.route_web_socket(re.compile(r"wss://good\.test/.*"), Broker().handle)
@@ -33,7 +34,7 @@ def pair(browser, client_first, relay=False):
     host.add_init_script(EXT_STUB)
     host.route("https://site.test/**", serve_fake_site)
     query = "?mqtt=wss://dead.test/mqtt,wss://good.test/mqtt"  # dead.test never resolves
-    query += "&relay=0" if relay else ""
+    query += {"only": "&relay=0&ice=relay", "then-direct": "&relay=0"}.get(relay, "")
     host.goto(f"{base}/index.html{query}")
     secret = host.input_value("#secret")
     link = f"{base}/index.html{query}#{secret}"
@@ -50,7 +51,8 @@ def pair(browser, client_first, relay=False):
     else:
         start_host()
         client.goto(link)
-    name = ("client first" if client_first else "host first") + (", relay" if relay else "")
+    name = "client first" if client_first else "host first"
+    name += f", relay {relay}" if relay else ""
     try:
         client.wait_for_function(f"{status}.includes('serving yes')")
         host.wait_for_function(f"{status}.includes('serving no')")  # hello arrived on both sides
@@ -60,9 +62,9 @@ def pair(browser, client_first, relay=False):
         raise
     check(True, f"{name}: paired through a dead and a live broker")
     if relay:
-        on_relay = "link: relay" in client.evaluate(status)
+        on_relay = relay == "then-direct" or "link: relay" in client.evaluate(status)
         check(on_relay and "dc: open (relay)" in host.inner_text("#log"),
-              f"{name}: link is the broker relay")
+              f"{name}: link started on the broker relay")
     else:
         check(host.inner_text("#log").count("dc: open") == 1, f"{name}: data channel opened once")
 
@@ -73,6 +75,18 @@ def pair(browser, client_first, relay=False):
     view.wait_for_selector("#p")
     check(view.title() == "real" and "GET https://site.test/" in host.inner_text("#log"),
           f"{name}: rendered tab served by the host over the live data channel")
+    if relay == "then-direct":  # the direct channel opened late; the next request may use it
+        for _ in range(60):
+            view.reload()
+            if "link: connected" in client.evaluate(status):
+                break
+            client.wait_for_timeout(500)
+        check("link: connected" in client.evaluate(status)
+              and "(late, adopted)" in client.inner_text("#log"),
+              f"{name}: direct channel adopted by the relay once it was idle")
+        view.reload()
+        view.wait_for_selector("#p")
+        check(True, f"{name}: page still loads over the adopted direct channel")
     ctx.close()
 
 
@@ -145,8 +159,9 @@ with sync_playwright() as p:
     check(resp.status == 502 and "no connected" in view.content(), "no app tab -> 502 page")
     pair(browser, client_first=False)
     pair(browser, client_first=True)
-    pair(browser, client_first=False, relay=True)
-    pair(browser, client_first=True, relay=True)
+    pair(browser, client_first=False, relay="only")
+    pair(browser, client_first=True, relay="only")
+    pair(browser, client_first=False, relay="then-direct")
     browser.close()
 srv.shutdown()
 shutil.rmtree(tmp)

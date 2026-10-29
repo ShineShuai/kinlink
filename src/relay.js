@@ -37,7 +37,9 @@ export class RelayChannel extends EventTarget {
   relay = true;
   binaryType = 'arraybuffer';
   bufferedAmountLowThreshold = 0;
-  bufferedAmount = 0; // payload bytes queued or unacked
+  held = 0; // payload bytes queued or unacked on the relay
+  alt = null; // a direct channel that came up after the relay started (adopt)
+  useAlt = false;
   readyState = 'connecting';
   active = false; // false: only listening; a peer's OPEN wakes it (see onwake)
   sid = crypto.getRandomValues(new Uint32Array(1))[0];
@@ -126,7 +128,7 @@ export class RelayChannel extends EventTarget {
     this.flight.clear();
     this.ahead.clear();
     this.parts = [];
-    this.next = this.expect = this.bufferedAmount = 0;
+    this.next = this.expect = this.held = 0;
   }
 
   opened() {
@@ -154,15 +156,15 @@ export class RelayChannel extends EventTarget {
   }
 
   acked(upTo) {
-    const before = this.bufferedAmount;
+    const before = this.held;
     for (const [seq, fl] of this.flight) {
       if (seq >= upTo) break; // Map keeps insertion order = seq order
       this.flight.delete(seq);
-      this.bufferedAmount -= fl.size;
+      this.held -= fl.size;
     }
     this.pump();
     if (before > this.bufferedAmountLowThreshold
-      && this.bufferedAmount <= this.bufferedAmountLowThreshold) {
+      && this.held <= this.bufferedAmountLowThreshold) {
       this.dispatchEvent(new Event('bufferedamountlow'));
     }
   }
@@ -176,9 +178,34 @@ export class RelayChannel extends EventTarget {
     }
   }
 
+  get bufferedAmount() { return this.useAlt ? this.alt.bufferedAmount : this.held; }
+
+  // A direct channel that opened after the relay started (Peer.wire). It takes over sending once
+  // every relay frame is acked: nothing of ours can then still arrive late, so messages cannot
+  // be reordered across the switch. Receiving works on both channels all the time. If it closes,
+  // sending falls back to the relay.
+  adopt(dc) {
+    this.alt = dc;
+    dc.addEventListener?.('bufferedamountlow', () => {
+      if (this.useAlt) this.dispatchEvent(new Event('bufferedamountlow'));
+    });
+    dc.addEventListener?.('close', () => this.route());
+  }
+
+  route() { // which channel carries the next message
+    const ok = this.alt?.readyState === 'open';
+    const want = ok && (this.useAlt || (!this.queue.length && !this.flight.size));
+    if (want !== this.useAlt) {
+      this.useAlt = want;
+      this.dispatchEvent(new Event('switch'));
+    }
+    return want;
+  }
+
   // string -> text message, ArrayBuffer/typed array -> binary message (like RTCDataChannel)
   send(data) {
     if (this.readyState !== 'open') throw new Error('relay not open');
+    if (this.route()) return this.alt.send(data);
     const bin = typeof data !== 'string';
     const u8 = !bin ? te.encode(data) : ArrayBuffer.isView(data)
       ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength) : new Uint8Array(data);
@@ -187,7 +214,7 @@ export class RelayChannel extends EventTarget {
       const part = u8.slice(i * FRAME, (i + 1) * FRAME); // copy: the caller may reuse its buffer
       const flags = (i === n - 1 ? 1 : 0) | (bin ? 2 : 0);
       this.queue.push({ seq: this.next++, data: part, flags });
-      this.bufferedAmount += part.length;
+      this.held += part.length;
     }
     this.pump();
   }
@@ -206,10 +233,10 @@ export class RelayChannel extends EventTarget {
 }
 
 // Starts the relay when the direct path does not come up: ICE failed, or still connecting after
-// `after` ms. Or when the peer starts it first (its OPEN arrives). Once the relay is the channel,
-// a late direct channel does not replace it (Peer.wire): switching mid-response would reorder.
-// Returns { chan, stop }. `forced` (ms = 0) starts it at once (tests).
-export function relayFallback(peer, inner, key, { after = 15000, onlog = () => {}, ...opts } = {}) {
+// `after` ms. Or when the peer starts it first (its OPEN arrives). The relay stays peer.dc; a
+// direct channel that comes up later is adopted by it (RelayChannel.adopt).
+// Returns { chan, stop }. `after` = 0 starts it at once (tests).
+export function relayFallback(peer, inner, key, { after = 8000, onlog = () => {}, ...opts } = {}) {
   const chan = new RelayChannel(inner, key, opts);
   let timer;
   const go = (why, woken = false) => {

@@ -29,7 +29,7 @@ if (cfg?.on) {
     brokers: cfg.brokers ?? CFG.mqtt,
     stun: CFG.stun.slice(0, 4),
     signaling: 'mqtt',
-    relayAfter: 15000,
+    relayAfter: 8000,
     enabled: () => true,
     exec: execViaPort,
     onlog: log,

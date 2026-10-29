@@ -5,11 +5,12 @@ import { Peer } from './p2p.js';
 import { relayFallback } from './relay.js';
 import { attach } from './proxy.js';
 
-export const BUILD = '0013';
+export const BUILD = '0014';
 
 // One pairing session: signaling (all brokers), sealed, one Peer, the relay fallback and the
 // request protocol. Used by the app tab and by the background Host (host.js).
-// o: { secret, brokers, stun, signaling ('mqtt' | 'bc'), relayAfter, enabled, exec, onlog,
+// o: { secret, brokers, stun, rtc (RTCConfiguration extras), signaling ('mqtt' | 'bc'), relayAfter,
+//      enabled, exec, onlog,
 //      onhello, onstate({ sig, link, peer }) }
 // Returns { peer, api, stop, dead() }; dead() says why an unattended Host should start over.
 export async function openSession(o) {
@@ -47,14 +48,15 @@ export async function openSession(o) {
     }
     return null;
   };
-  const peer = new Peer(sig, o.stun.map((urls) => ({ urls })));
+  const peer = new Peer(sig, o.stun.map((urls) => ({ urls })), o.rtc);
   peer.onlog = onlog;
   const link = () => onstate({
-    link: peer.dc?.relay && peer.dc.readyState === 'open' ? 'relay' : peer.pc.connectionState,
+    link: peer.dc?.relay && peer.dc.readyState === 'open' && !peer.dc.useAlt
+      ? 'relay' : peer.pc.connectionState,
   });
   peer.pc.addEventListener('connectionstatechange', link);
   const relay = relayFallback(peer, inner, relayKey, { after: o.relayAfter, onlog });
-  for (const ev of ['open', 'close']) relay.chan.addEventListener(ev, link);
+  for (const ev of ['open', 'close', 'switch']) relay.chan.addEventListener(ev, link);
   const api = attach(peer, {
     enabled: o.enabled, onlog, build: BUILD, onhello: o.onhello, exec: o.exec,
   });
