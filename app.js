@@ -2,6 +2,7 @@ import { BroadcastAdapter, FanoutAdapter } from './src/signaling.js';
 import { MqttWssAdapter } from './src/mqtt.js';
 import { SealedAdapter, derive, newSecret } from './src/crypto.js';
 import { Peer } from './src/p2p.js';
+import { relayFallback } from './src/relay.js';
 import { attach } from './src/proxy.js';
 import { CFG } from './src/diag.js';
 import { canRender, renderedUrl, startBridge } from './src/bridge.js';
@@ -30,9 +31,9 @@ if (!isExt) try { localStorage.removeItem('kinlink.secret'); } catch { /* storag
 const CSP = '<meta http-equiv="Content-Security-Policy" '
   + 'content="default-src \'none\'; style-src \'unsafe-inline\'; img-src data:">';
 const ORIGINS = { origins: ['<all_urls>'] };
-const BUILD = '0011';
+const BUILD = '0012';
 const PAGES_URL = 'https://shineshuai.github.io/kinlink/'; // hosted Client page
-let peer, api, sig;
+let peer, api, sig, relay;
 const jar = new Jar(); // cookies of the sites we browse, kept in this tab only
 const browse = () => api && browser(api, jar);
 // The extension host does single hops with Cookie/Referer/Origin; else plain fetch (see proxy.js).
@@ -49,6 +50,11 @@ const showPeer = (m) => {
 // ?signaling=bc: BroadcastChannel instead of brokers, only for two tabs of one browser (dev).
 const signaling = new URLSearchParams(location.search).get('signaling') ?? 'mqtt';
 const brokers = () => new URLSearchParams(location.search).get('mqtt')?.split(',') ?? CFG.mqtt;
+// ?relay=<ms>: start the broker relay after that long without a direct path (default 15000,
+// 0 = at once, for tests). The relay is slow: it only carries traffic if WebRTC finds no path.
+const relayAfter = Number(new URLSearchParams(location.search).get('relay') ?? 15000);
+const linkState = () => (peer.dc?.relay && peer.dc.readyState === 'open'
+  ? 'relay' : peer.pc.connectionState);
 
 $('secret').value = location.hash.slice(1) || store('secret') || newSecret();
 $('new').onclick = () => { $('secret').value = newSecret(); };
@@ -67,7 +73,7 @@ async function connect() {
   if (!Peer.prototype.tx) throw new Error('src/p2p.js is outdated: apply all patches in order');
   const secret = $('secret').value.trim();
   store('secret', secret);
-  const { room, sigKey } = await derive(secret);
+  const { room, sigKey, relayKey } = await derive(secret);
   let inner;
   if (signaling === 'bc') {
     inner = new BroadcastAdapter(`kinlink-${room}`);
@@ -80,14 +86,19 @@ async function connect() {
     state.sig = 'signaling: connecting';
   }
   sig?.close().catch(() => {});
+  relay?.stop();
   peer?.pc.close();
   sig = new SealedAdapter(inner, sigKey);
   peer = new Peer(sig, CFG.stun.slice(0, 4).map((urls) => ({ urls })));
   peer.onlog = log;
   peer.pc.addEventListener('connectionstatechange', () => {
-    state.link = peer.pc.connectionState;
+    state.link = linkState();
     paint();
   });
+  relay = relayFallback(peer, inner, relayKey, { after: relayAfter, onlog: log });
+  for (const ev of ['open', 'close']) {
+    relay.chan.addEventListener(ev, () => { state.link = linkState(); paint(); });
+  }
   api = attach(peer, {
     enabled: () => $('host').checked, onlog: log, build: BUILD, onhello: showPeer,
     exec: hostExec ? extExec : undefined,
@@ -98,6 +109,7 @@ async function connect() {
   try {
     await sig.open();
   } catch (e) {
+    relay.stop();
     peer.pc.close();
     peer = api = undefined; // nothing to talk to: do not leave a half-connected state behind
     state.sig = `signaling failed: ${e.message}`;

@@ -19,24 +19,31 @@ export async function derive(secret) {
     name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(), info: te.encode(info),
   });
   const room = new Uint8Array(await crypto.subtle.deriveBits(p('kinlink/room'), ikm, 128));
-  const sigKey = await crypto.subtle.deriveKey(
-    p('kinlink/signaling'), ikm, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
-  return { room: hex(room), sigKey }; // TODO: per-direction session keys
+  const key = (info) => crypto.subtle.deriveKey(
+    p(info), ikm, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+  return {
+    room: hex(room), sigKey: await key('kinlink/signaling'), relayKey: await key('kinlink/relay'),
+  }; // TODO: per-direction session keys
 }
 
-// Random 96-bit IV: fine for a handful of signaling messages per key.
-export async function sealText(key, text) {
+// Random 96-bit IV: fine up to ~2^32 messages per key (signaling and relay frames).
+export async function sealBytes(key, u8) {
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, te.encode(text));
-  return b64u(Uint8Array.from([...iv, ...new Uint8Array(ct)]));
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, u8));
+  const out = new Uint8Array(12 + ct.length);
+  out.set(iv);
+  out.set(ct, 12);
+  return b64u(out);
 }
 
-export async function openText(key, s) {
+export async function openBytes(key, s) {
   const b = unb64u(s);
-  const pt = await crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv: b.slice(0, 12) }, key, b.slice(12));
-  return td.decode(pt);
+  return new Uint8Array(await crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv: b.slice(0, 12) }, key, b.slice(12)));
 }
+
+export const sealText = (key, text) => sealBytes(key, te.encode(text));
+export const openText = async (key, s) => td.decode(await openBytes(key, s));
 
 // Wraps any adapter: untrusted medium in, authenticated plaintext out.
 // The SDP carries the DTLS fingerprint, so opening it also pins the peer's cert.

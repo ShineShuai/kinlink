@@ -15,7 +15,7 @@ The Client never contacts the target site.
 3. Client: open the invite link. It connects and offers by itself, nothing to click. The offer is
    re-sent for 60 s, so it does not matter which side is first.
 4. The status line shows `signaling: 2/3 signaling servers | link: connected | peer: build
-   0011, serving yes`. Then either:
+   0012, serving yes`. Then either:
    - "Open rendered": new tab at `.../kinlink/~/<url>`, a real page through the peer
      (hosted web page only; keep the app tab open). Typing `.../kinlink/~/example.com/` works too.
    - "Fetch via peer": script-free preview in this page (also works in the extension page).
@@ -30,8 +30,9 @@ If it does not connect (the log says where it stops):
 - `signaling failed` / `0/3`: every broker is blocked or down. Open `diag.html?auto`; the broker
   list is `CFG.mqtt` in `src/diag.js` (`?mqtt=wss://a,wss://b` overrides it per page).
 - Signaling ok, `no answer yet`: the other side is not connected, or uses another secret.
-- `ice: failed` / link `failed`: no direct path between the two browsers (needs a TURN/relay,
-  not built yet). The log then prints `ice local: host .., srflx ..`, the pair states and a
+- `ice: failed` / link `failed`: no direct path between the two browsers. After 15 s (or at once
+  on `failed`) both sides switch to the broker relay: status `link: relay`, slow but it works. The
+  log prints `relay: ..` and, before that, `ice local: host .., srflx ..`, the pair states and a
   hint. `host 0` or `srflx 0` usually means a WebRTC privacy extension or policy. Both sides
   behind one public IP (e.g. two tabs on one machine) often fails: Chrome hides local IPs
   (mDNS) and many routers do not hairpin NAT. Test from two different networks.
@@ -50,6 +51,16 @@ PASS/WARN/FAIL per site and a screenshot. `python3 test/corpus.py https://my.sit
 own list. This is the measurement for "is rewriting good enough?".
 
 Diagnostics: `.../kinlink/diag.html?auto` runs the probes on load; "Copy JSON" for results.
+
+## Relay fallback (`src/relay.js`)
+If WebRTC finds no path (CGNAT, same NAT, UDP blocked), the same protocol runs over the signaling
+brokers: frames sealed with a separate HKDF key, a small ARQ (sequence numbers, cumulative acks,
+16-frame window, retransmit with backoff) makes the lossy, duplicating QoS 0 medium reliable and
+ordered. `RelayChannel` looks like an RTCDataChannel to `Peer`/`proxy.js`, nothing above it changes.
+Start: ICE `failed`, or `connecting` for 15 s (`?relay=<ms>` changes it, `?relay=0` forces it, for
+tests), or the peer's OPEN frame arrives (then this side joins). Once chosen it stays until
+reconnect: a direct channel that opens later is wired for receiving only. Every frame goes to all
+connected brokers (3x traffic, no single point of failure). Expect tens of KB/s and 100s of ms.
 
 ## What the Client does like a browser (`src/browse.js`, `src/cookies.js`)
 The Host executes exactly one request hop and never follows redirects. The Client follows them
@@ -82,10 +93,11 @@ Local: `npm test`, `bash scripts/build-site.sh`,
 - `render-sw.js`, `rt.js`, `src/bridge.js`, `src/render.js`, `src/rewrite.js`: rendering layer.
 - `src/proxy.js`: request/response protocol, SSRF guard. `src/browse.js`, `src/cookies.js`: Client
   side redirects, cookies. `src/host-ext.js`: the extension's one-hop executor.
-- `src/p2p.js`: WebRTC peer. `src/crypto.js`: HKDF, AES-GCM, SealedAdapter.
+- `src/p2p.js`: WebRTC peer. `src/relay.js`: broker relay channel and fallback trigger.
+  `src/crypto.js`: HKDF, AES-GCM, SealedAdapter.
 - `src/signaling.js`, `src/mqtt.js`: signaling adapters; `FanoutAdapter` uses all brokers at once. `src/diag.js`: probes and endpoint list.
 - `manifest.json`, `background.js`: extension shell (opens `index.html`).
-- `test/*.mjs`: unit tests (fake broker, fake RTCPeerConnection). `test/e2e.py` (+ `harness.html`): browser test of rendering and pairing through a fake broker.
+- `test/*.mjs`: unit tests (fake broker, fake RTCPeerConnection, lossy medium for `relay.mjs`). `test/e2e.py` (+ `harness.html`): browser test of rendering and pairing through a fake broker, also with the relay forced.
   `test/e2e_ext.py`: loads the real extension as Host and runs a cookie-consent flow.
   `test/corpus.py`: the site corpus (manual, needs internet). `scripts/`: build.
 
@@ -107,4 +119,8 @@ Local: `npm test`, `bash scripts/build-site.sh`,
 - Extension pages cannot register Service Workers: rendering is for the hosted page only.
 - DNS names resolving to private IPs are not blocked; redirects are checked after the fact.
 - Host tab must stay open. Signaling needs both sides online (no retained messages).
-- No WSS relay fallback yet. Bodies are buffered (32 MiB max), no streaming.
+- Relay: throughput on the real public brokers is not measured (their rate and size limits are
+  unknown); a request times out after 30 s, so big bodies fail on it. No switch back to a direct
+  path that comes up late. Brokers see room id, timing and volume. A malicious broker can replay
+  old frames of an earlier session (needs per-session keys). No own WSS/TURN relay yet.
+- Bodies are buffered (32 MiB max), no streaming.

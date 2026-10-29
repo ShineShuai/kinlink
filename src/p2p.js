@@ -66,12 +66,18 @@ export class Peer {
     }
   }
 
+  // A relay channel (src/relay.js) stays the sending channel once chosen: a direct channel that
+  // opens late is wired for receiving only (switching mid-response would reorder frames).
   wire(dc) {
-    this.dc = dc;
+    const keep = this.dc?.relay && this.dc.readyState !== 'closed' && !dc.relay;
+    if (!keep) this.dc = dc;
     dc.binaryType = 'arraybuffer';
     dc.bufferedAmountLowThreshold = HIGH / 4;
-    dc.onopen = () => { this.onlog('dc: open'); this.onopen?.(); };
-    dc.onclose = () => this.onlog('dc: close');
+    dc.onopen = () => {
+      this.onlog(`dc: open${dc.relay ? ' (relay)' : ''}${keep ? ' (not used)' : ''}`);
+      if (!keep) this.onopen?.();
+    };
+    dc.onclose = () => this.onlog(`dc: close${dc.relay ? ' (relay)' : ''}`);
     dc.onmessage = (e) => this.onmsg(e.data);
   }
 

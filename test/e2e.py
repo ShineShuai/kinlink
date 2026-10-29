@@ -23,8 +23,9 @@ def serve_fake_site(route):
                   headers={"access-control-allow-origin": "*"})  # the real Host has host_permissions
 
 
-def pair(browser, client_first):
-    """Host page (extension stubbed) and Client page (invite link) over a fake broker."""
+def pair(browser, client_first, relay=False):
+    """Host page (extension stubbed) and Client page (invite link) over a fake broker.
+    relay: ?relay=0 on both pages, so the frames travel over the broker, not the data channel."""
     ctx = browser.new_context()
     ctx.set_default_timeout(45000)
     ctx.route_web_socket(re.compile(r"wss://good\.test/.*"), Broker().handle)
@@ -32,6 +33,7 @@ def pair(browser, client_first):
     host.add_init_script(EXT_STUB)
     host.route("https://site.test/**", serve_fake_site)
     query = "?mqtt=wss://dead.test/mqtt,wss://good.test/mqtt"  # dead.test never resolves
+    query += "&relay=0" if relay else ""
     host.goto(f"{base}/index.html{query}")
     secret = host.input_value("#secret")
     link = f"{base}/index.html{query}#{secret}"
@@ -48,7 +50,7 @@ def pair(browser, client_first):
     else:
         start_host()
         client.goto(link)
-    name = "client first" if client_first else "host first"
+    name = ("client first" if client_first else "host first") + (", relay" if relay else "")
     try:
         client.wait_for_function(f"{status}.includes('serving yes')")
         host.wait_for_function(f"{status}.includes('serving no')")  # hello arrived on both sides
@@ -57,7 +59,12 @@ def pair(browser, client_first):
             print(f"--- {who}: {pg.evaluate(status)}\n{pg.inner_text('#log')}")
         raise
     check(True, f"{name}: paired through a dead and a live broker")
-    check(host.inner_text("#log").count("dc: open") == 1, f"{name}: data channel opened once")
+    if relay:
+        on_relay = "link: relay" in client.evaluate(status)
+        check(on_relay and "dc: open (relay)" in host.inner_text("#log"),
+              f"{name}: link is the broker relay")
+    else:
+        check(host.inner_text("#log").count("dc: open") == 1, f"{name}: data channel opened once")
 
     client.fill("#url", "https://site.test/")
     with ctx.expect_page() as popup:
@@ -138,6 +145,8 @@ with sync_playwright() as p:
     check(resp.status == 502 and "no connected" in view.content(), "no app tab -> 502 page")
     pair(browser, client_first=False)
     pair(browser, client_first=True)
+    pair(browser, client_first=False, relay=True)
+    pair(browser, client_first=True, relay=True)
     browser.close()
 srv.shutdown()
 shutil.rmtree(tmp)
