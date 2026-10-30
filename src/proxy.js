@@ -81,6 +81,8 @@ export function attach(peer, opts = {}) {
       });
       const why2 = blocked(out.url); // a followed redirect (default executor) lands elsewhere
       if (why2) throw new Error(`redirect to ${why2}`);
+      if (!(out.status >= 100 && out.status <= 599)) throw new Error(`bad status ${out.status}`);
+      onlog(`${out.status} ${r.url}${out.location ? ` -> ${out.location}` : ''}`);
       say('res', {
         id: r.id, status: out.status, url: out.url, headers: out.headers,
         cookies: out.setCookies, location: out.location,
@@ -101,6 +103,7 @@ export function attach(peer, opts = {}) {
       }
       say('fin', { id: r.id });
     } catch (e) {
+      onlog(`fail ${r.url}: ${e.message}`);
       say('err', { id: r.id, message: e.message });
     }
   }

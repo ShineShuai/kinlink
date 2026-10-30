@@ -57,9 +57,11 @@ export class RelayChannel extends EventTarget {
   ahead = new Map(); // out-of-order frames by seq
   parts = [];
 
-  constructor(inner, key, { tickMs = 500, rtoMs = 1000, openMs = 60000, send } = {}) {
+  constructor(inner, key, o = {}) {
     super();
-    Object.assign(this, { inner, key, tickMs, rtoMs, openMs });
+    const { tickMs = 500, rtoMs = 1000, openMs = 60000, keepMs = 15000, send } = o;
+    Object.assign(this, { inner, key, tickMs, rtoMs, openMs, keepMs });
+    this.lastSent = 0;
     this.xmit = send ?? ((text) => inner.send(text));
     this.listener = (e) => this.hear(e.data);
     inner.addEventListener('message', this.listener);
@@ -76,6 +78,7 @@ export class RelayChannel extends EventTarget {
   }
 
   async put(bytes) { // best effort: loss is handled by retransmission
+    this.lastSent = Date.now();
     try {
       await this.xmit(await sealBytes(this.key, bytes));
     } catch { /* no broker up right now */ }
@@ -89,6 +92,11 @@ export class RelayChannel extends EventTarget {
         this.lastOpen = now;
         this.put(pack(OPEN, this.sid, 0));
       }
+    }
+    // Keepalive: an idle side that lost its peer (it restarted) finds out: the new session sees a
+    // frame it does not know, joins and sends OPEN, we reset and re-open.
+    if (this.readyState === 'open' && now - this.lastSent >= this.keepMs) {
+      this.put(pack(ACK, this.sid, this.expect));
     }
     let n = 0;
     for (const [seq, fl] of this.flight) {
@@ -106,10 +114,10 @@ export class RelayChannel extends EventTarget {
     let f;
     try { f = unpack(await openBytes(this.key, text)); } catch { return; } // foreign or forged
     if (this.old.has(f.sid)) return;
-    if (!this.active) { // the peer chose the relay: join it
-      if (f.type !== OPEN) return;
-      this.onwake?.();
+    if (!this.active) { // the peer uses the relay: join it. Frames other than OPEN come from a
+      this.onwake?.(); // session that lost us (we restarted): joining sends our OPEN, so it resets
       if (!this.active) return;
+      if (f.type !== OPEN) return;
     }
     if (f.type === OPEN) {
       const again = this.peerSid !== null && this.peerSid !== f.sid; // peer restarted
@@ -236,14 +244,16 @@ export class RelayChannel extends EventTarget {
 // `after` ms. Or when the peer starts it first (its OPEN arrives). The relay stays peer.dc; a
 // direct channel that comes up later is adopted by it (RelayChannel.adopt).
 // Returns { chan, stop }. `after` = 0 starts it at once (tests).
-export function relayFallback(peer, inner, key, { after = 8000, onlog = () => {}, ...opts } = {}) {
-  const chan = new RelayChannel(inner, key, opts);
+// `canWake()` false: this session is over (a restart is pending), do not let the peer join it.
+export function relayFallback(peer, inner, key, opts = {}) {
+  const { after = 8000, onlog = () => {}, canWake = () => true, ...rest } = opts;
+  const chan = new RelayChannel(inner, key, rest);
   let timer;
   const go = (why, woken = false) => {
     // Woken by the peer's OPEN: join even if our direct channel is open (the peer can only be
     // reached this way). Own trigger: only if the direct channel is not open.
     if (chan.active || chan.readyState === 'closed') return;
-    if (!woken && peer.dc?.readyState === 'open') return;
+    if (woken ? !canWake() : peer.dc?.readyState === 'open') return;
     onlog(`relay: ${why}`);
     chan.activate();
     peer.wire(chan);

@@ -57,58 +57,66 @@ const rtc = new URLSearchParams(location.search).get('ice') === 'relay'
 $('secret').value = location.hash.slice(1) || store('secret') || newSecret();
 $('new').onclick = () => { $('secret').value = newSecret(); };
 
-$('host').disabled = !isExt;
-if (isExt) chrome.permissions.contains(ORIGINS).then((ok) => { $('host').checked = ok; });
-$('host').onchange = async (e) => {
-  if (e.target.checked && !(await chrome.permissions.request(ORIGINS))) {
-    e.target.checked = false;
-    log('permission denied');
-  }
-  api?.hello();
-};
-
-// Background Host (extension page only): an offscreen document serves while no tab is open
-// (background.js, host.js). This tab then only shows its status and log.
+// Serving (extension page only): off, in this tab (Connect, the tab stays open) or in the
+// background (an offscreen document serves, background.js and host.js; this tab then only shows
+// its status and log).
 const bgCap = isExt && !!chrome.storage?.local;
-$('bg').disabled = !bgCap;
+$('serve').disabled = !isExt;
+$('serve').querySelector('[value=bg]').disabled = !bgCap;
+let mode = 'off'; // what is applied
 const bgShow = (r) => {
   if (r?.status) $('status').textContent = r.status;
   if (r?.log !== undefined) $('log').textContent = r.log ? `${r.log}\n` : '';
 };
 const bgUi = (on) => {
-  $('bg').checked = on;
   for (const id of ['connect', 'offer', 'new']) $(id).disabled = on;
+  $('secret').readOnly = on;
   if (on) chrome.runtime.sendMessage({ kl: 'who' }).then(bgShow, () => {});
 };
+if (isExt) {
+  (async () => {
+    const bg = bgCap ? (await chrome.storage.local.get('bg')).bg : null;
+    if (bg?.on) {
+      $('secret').value = bg.secret;
+      $('serve').value = 'bg';
+      bgUi(true);
+    } else if (await chrome.permissions.contains(ORIGINS)) {
+      $('serve').value = 'tab';
+    }
+    mode = $('serve').value;
+  })();
+}
 if (bgCap) {
-  chrome.storage.local.get('bg').then(({ bg }) => {
-    if (!bg?.on) return;
-    $('secret').value = bg.secret;
-    bgUi(true);
-  });
   chrome.runtime.onMessage.addListener((m) => {
-    if (m?.kl !== 'bgstat' || !$('bg').checked) return;
+    if (m?.kl !== 'bgstat' || $('serve').value !== 'bg') return;
     bgShow({ status: m.status });
     if (m.line) $('log').textContent += `${m.line}\n`;
   });
 }
-$('bg').onchange = async (e) => {
-  const on = e.target.checked;
+$('serve').onchange = async (e) => {
+  const next = e.target.value;
   try {
-    if (on && !(await chrome.permissions.request(ORIGINS))) throw new Error('permission denied');
-    const secret = $('secret').value.trim();
-    const q = new URLSearchParams(location.search).get('mqtt')?.split(',');
-    const r = await chrome.runtime.sendMessage({ kl: 'bg', on, secret, brokers: q });
-    if (r?.error) throw new Error(r.error);
-    if (on) {
-      store('secret', secret);
-      session?.stop();
-      session = peer = api = undefined;
-      $('log').textContent = '';
+    if (next !== 'off' && !(await chrome.permissions.request(ORIGINS))) {
+      throw new Error('permission denied');
     }
-    bgUi(on);
+    if (next === 'bg' || mode === 'bg') {
+      const secret = $('secret').value.trim();
+      const q = new URLSearchParams(location.search).get('mqtt')?.split(',');
+      const on = next === 'bg';
+      const r = await chrome.runtime.sendMessage({ kl: 'bg', on, secret, brokers: q });
+      if (r?.error) throw new Error(r.error);
+      if (next === 'bg') {
+        store('secret', secret);
+        session?.stop();
+        session = peer = api = undefined;
+        $('log').textContent = '';
+      }
+    }
+    bgUi(next === 'bg');
+    mode = next;
+    api?.hello();
   } catch (err) {
-    e.target.checked = !on;
+    e.target.value = mode;
     log(`err: ${err.message}`);
   }
 };
@@ -126,7 +134,7 @@ async function connect() {
     signaling,
     relayAfter,
     rtc,
-    enabled: () => $('host').checked,
+    enabled: () => $('serve').value === 'tab',
     exec: hostExec ? execViaPort : undefined,
     onlog: log,
     onhello: showPeer,

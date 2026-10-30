@@ -6,6 +6,9 @@
 // Runs in the service worker only (background.js); pages reach it through src/ext-port.js.
 let nextRule = 1;
 const taps = new Map(); // "METHOD url" -> [{ status, setCookies, location }]
+// Redirects without a headers event: with extraHeaders Chrome reports an internal redirect (HSTS
+// http -> https, 307) only through onBeforeRedirect, and fetch() shows it as an opaque redirect.
+const hops = new Map(); // "METHOD url" -> [{ status, location }]
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 let tapped = false;
@@ -25,16 +28,28 @@ function startTap() {
     taps.set(key, [...(taps.get(key) ?? []),
       { status: d.statusCode, setCookies: all('set-cookie'), location: all('location')[0] }]);
   }, { urls: ['<all_urls>'] }, ['responseHeaders', 'extraHeaders']);
+  chrome.webRequest.onBeforeRedirect.addListener((d) => {
+    if (d.initiator !== location.origin || d.type !== 'xmlhttprequest') return;
+    const key = `${d.method} ${d.url}`;
+    hops.set(key, [...(hops.get(key) ?? []), { status: d.statusCode, location: d.redirectUrl }]);
+  }, { urls: ['<all_urls>'] });
 }
 
-async function takeTap(key) {
+const shift = (map, key) => {
+  const list = map.get(key);
+  const t = list?.shift();
+  if (list && !list.length) map.delete(key);
+  return t;
+};
+
+async function takeTap(key, redirect) {
   for (let i = 0; i < 40; i++) { // the event can arrive just after fetch() resolves
-    const list = taps.get(key);
-    if (list?.length) {
-      const t = list.shift();
-      if (!list.length) taps.delete(key);
-      return t;
+    if (taps.get(key)?.length) {
+      if (redirect) shift(hops, key); // same redirect, the headers event has more (Set-Cookie)
+      return shift(taps, key);
     }
+    const h = redirect && shift(hops, key); // events of one request arrive in order
+    if (h) return { status: h.status, setCookies: [], location: h.location };
     await sleep(25);
   }
   return null;
@@ -58,15 +73,22 @@ export async function exec(req) {
     const res = await fetch(url, {
       method, headers, body, signal, credentials: 'omit', cache: 'no-store', redirect: 'manual',
     });
-    const tap = await takeTap(`${method} ${url}`);
     const redirect = res.type === 'opaqueredirect';
+    const tap = await takeTap(`${method} ${url}`, redirect);
+    let status = tap?.status ?? res.status;
+    let loc = tap?.location;
+    if (redirect && !loc && url.startsWith('http:')) { // no event at all: an HSTS upgrade
+      status = 307;
+      loc = url.replace(/^http:/, 'https:');
+    }
+    if (!(status >= 100 && status <= 599)) throw new Error('redirect target hidden by the browser');
     return {
-      status: tap?.status ?? res.status,
+      status,
       url,
       headers: redirect ? [] : [...res.headers],
       body: redirect ? null : res.body,
       setCookies: tap?.setCookies ?? [],
-      location: tap?.location,
+      location: loc,
     };
   } finally {
     if (requestHeaders.length) await rules.updateSessionRules({ removeRuleIds: [id] });

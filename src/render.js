@@ -30,7 +30,12 @@ export async function render(req, ask, root) {
   if (!SCHEME.test(req.url)) return redirect(root + u.href);
   let r;
   try { r = await ask(u.href, { method: req.method, headers: req.headers, body: req.body, referer: req.referer }); } catch (e) { return page(502, e.message); }
+  if (!(r.status >= 200 && r.status <= 599)) return page(502, `peer returned status ${r.status}`);
   if (new URL(r.url).href !== u.href) return redirect(root + r.url); // base for relative URLs
+  try { return build(r, root); } catch (e) { return page(502, e.message); }
+}
+
+function build(r, root) {
   const type = r.headers.find(([k]) => k === 'content-type')?.[1] ?? '';
   const headers = new Headers({ 'content-security-policy': CSP });
   for (const [k, v] of r.headers) if (KEEP.includes(k)) headers.set(k, v);

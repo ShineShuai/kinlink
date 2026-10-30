@@ -2,7 +2,8 @@
 The REAL extension is the Host (Chromium loads it), the hosted Client page renders through it.
 A fake site on site.test needs a consent flow: 302 -> form POST (Origin/Referer checked) ->
 303 + Set-Cookie -> page that needs the cookie. Checks cookies, POST, headers and per-hop redirects."""
-import http.server, json, pathlib, re, shutil, sys, tempfile, threading
+import base64, hashlib, http.server, json, pathlib, re, shutil, ssl, subprocess, sys, tempfile
+import threading
 from playwright.sync_api import sync_playwright
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -53,6 +54,32 @@ class Site(http.server.BaseHTTPRequestHandler):
 site = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Site)
 threading.Thread(target=site.serve_forever, daemon=True).start()
 
+
+class Hsts(Site):
+    """hsts.test: https only, sends Strict-Transport-Security. Once the browser has seen that,
+    http://hsts.test/ is upgraded inside Chrome (an internal 307, never sent to the network)."""
+
+    def do_GET(self):
+        self.seen()
+        self.reply(200, b"<!doctype html><title>hsts</title><p id=h>https only</p>",
+                   [("Strict-Transport-Security", "max-age=3600")])
+
+
+tls = pathlib.Path(tempfile.mkdtemp(prefix="kinlink-tls-"))
+subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2",
+                "-keyout", tls / "k.pem", "-out", tls / "c.pem", "-subj", "/CN=hsts.test",
+                "-addext", "subjectAltName=DNS:hsts.test"], check=True, capture_output=True)
+pub = subprocess.run(["openssl", "x509", "-in", tls / "c.pem", "-pubkey", "-noout"],
+                     check=True, capture_output=True).stdout
+der = subprocess.run(["openssl", "pkey", "-pubin", "-outform", "der"], input=pub,
+                     check=True, capture_output=True).stdout
+spki = base64.b64encode(hashlib.sha256(der).digest()).decode()
+hsts = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Hsts)
+tls_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+tls_ctx.load_cert_chain(tls / "c.pem", tls / "k.pem")
+hsts.socket = tls_ctx.wrap_socket(hsts.socket, server_side=True)
+threading.Thread(target=hsts.serve_forever, daemon=True).start()
+
 tmp, srv, base = build_site()
 R = f"{base}/~/"
 ext = pathlib.Path(tempfile.mkdtemp(prefix="kinlink-ext-")) / "ext"
@@ -67,7 +94,9 @@ with sync_playwright() as p:
         tempfile.mkdtemp(), channel="chromium", headless=True,
         args=["--no-sandbox", f"--disable-extensions-except={ext}", f"--load-extension={ext}",
               "--allow-loopback-in-peer-connection", "--disable-features=WebRtcHideLocalIpsWithMdns",
-              f"--host-resolver-rules=MAP site.test 127.0.0.1:{site.server_port}"])
+              "--host-resolver-rules=MAP site.test 127.0.0.1:%d, MAP hsts.test 127.0.0.1:%d"
+              % (site.server_port, hsts.server_port),
+              f"--ignore-certificate-errors-spki-list={spki}"])
     ctx.set_default_timeout(45000)
     ctx.route_web_socket(re.compile(r"wss://good\.test/.*"), Broker().handle)
     sw = ctx.service_workers[0] if ctx.service_workers else ctx.wait_for_event("serviceworker")
@@ -125,6 +154,30 @@ with sync_playwright() as p:
     check(not any(c["name"] == "ok" for c in ctx.cookies()),
           "the host's own cookie jar stayed clean")
 
+    # HSTS: after one https visit Chrome upgrades http://hsts.test/ internally. fetch() then shows
+    # an opaque redirect and webRequest only onBeforeRedirect: the Host must still report 307 +
+    # Location (0014 sent status 0 and the page died with ERR_FAILED).
+    def open_view(url):
+        client.fill("#url", url)
+        with ctx.expect_page() as pop:
+            client.click("#open")
+        return pop.value
+
+    v = open_view("https://hsts.test/")
+    v.wait_for_selector("#h")
+    v.close()
+    v = open_view("http://hsts.test/")
+    try:
+        v.wait_for_selector("#h")
+    except Exception:
+        print("host log:\n" + host.inner_text("#log"))
+        print("view:", v.url, v.content()[:300])
+        raise
+    check(v.url == f"{R}https://hsts.test/", f"HSTS upgrade followed by the client: {v.url}")
+    check("307 http://hsts.test/ -> https://hsts.test/" in host.inner_text("#log"),
+          "host logged the upgrade as a 307 redirect")
+    v.close()
+
     # Background host: the offscreen document serves while no Kinlink tab is open, and takes a
     # new client after the first one left. Needs a real WebSocket broker (offscreen documents are
     # not covered by route_web_socket).
@@ -135,7 +188,7 @@ with sync_playwright() as p:
     ui = ctx.new_page()
     ui.goto(f"chrome-extension://{ext_id}/index.html{mq}")
     secret2 = ui.input_value("#secret")
-    ui.check("#bg")
+    ui.select_option("#serve", "bg")
     status_has(ui, "background host", "1/1 signaling")
     n_docs = sw.evaluate("chrome.runtime.getContexts({contextTypes: ['OFFSCREEN_DOCUMENT']})"
                          ".then((c) => c.length)")
@@ -143,9 +196,9 @@ with sync_playwright() as p:
     ui.close()
     check(not ctx.pages, "background host: no tab is open at all")
 
-    def pair_and_browse(n):
+    def pair_and_browse(n, extra=""):
         pg = ctx.new_page()
-        pg.goto(f"{base}/index.html{mq}#{secret2}")
+        pg.goto(f"{base}/index.html{mq}{extra}#{secret2}")
         try:
             pg.wait_for_function(f"{status}.includes('serving yes')")
         except Exception:
@@ -168,6 +221,37 @@ with sync_playwright() as p:
     first.close()
     second = pair_and_browse(2)
     check(True, "background host: client 2 paired after client 1 left (session restarted)")
+
+    # Client 3 can only use the relay. It arrives while the Host still holds client 2's session, so
+    # the Host restarts for its offer; client 3's relay must then find the new session (its idle
+    # keepalive wakes it) and keep working.
+    second.close()
+    third = pair_and_browse(3, "&relay=0&ice=relay")
+    ui2 = ctx.new_page()
+    ui2.goto(f"chrome-extension://{ext_id}/index.html{mq}")
+
+    def host_log():
+        ui2.reload()
+        for _ in range(50):
+            text = ui2.inner_text("#log")
+            if "build" in text:
+                return text
+            ui2.wait_for_timeout(100)
+        return text
+
+    for _ in range(40):
+        text = host_log()
+        if text.count("dc: open (relay)") >= 2 and "host: restart" in text:
+            break
+        ui2.wait_for_timeout(2000)
+    else:
+        raise AssertionError("client 3's relay never reached the restarted Host\n" + host_log())
+    check(True, "background host: relay client found the restarted session")
+    third.fill("#url", "http://site.test/consent")
+    with ctx.expect_page() as pop:
+        third.click("#open")
+    pop.value.wait_for_selector("#agree")
+    check(True, "background host: relay client browses after the restart")
     ctx.close()
     wsb.close()
 srv.shutdown()

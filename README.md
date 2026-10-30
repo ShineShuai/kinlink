@@ -10,12 +10,13 @@ The Client never contacts the target site.
 ## Test (two machines)
 1. Host: `chrome://extensions` > Developer mode > Load unpacked > the folder with
    `manifest.json`. The app opens (later: puzzle icon > pin Kinlink).
-2. Host tab: "New secret", tick "serve requests" (grant), Connect,
-   "Copy invite link", send the link.
+2. Host tab: set "Serve requests" to "in background" (grant the permission), "Copy invite link",
+   send the link. No Connect needed, the tab can be closed. (Or "in this tab": click Connect and
+   keep the tab open, you see the log live. "off": this browser only browses.)
 3. Client: open the invite link. It connects and offers by itself, nothing to click. The offer is
    re-sent for 60 s, so it does not matter which side is first.
 4. The status line shows `signaling: 2/3 signaling servers | link: connected | peer: build
-   0014, serving yes`. Then either:
+   0015, serving yes`. Then either:
    - "Open rendered": new tab at `.../kinlink/~/<url>`, a real page through the peer
      (hosted web page only; keep the app tab open). Typing `.../kinlink/~/example.com/` works too.
    - "Fetch via peer": script-free preview in this page (also works in the extension page).
@@ -53,16 +54,23 @@ own list. This is the measurement for "is rewriting good enough?".
 Diagnostics: `.../kinlink/diag.html?auto` runs the probes on load; "Copy JSON" for results.
 
 ## Background Host (`background.js`, `host.html`, `host.js`)
-Host tab: tick "serve in background" (grants the host permission). An offscreen document (reason
+Host tab: set "Serve requests" to "in background" (grants the host permission). An offscreen document (reason
 WEB_RTC) then runs the Host with no tab open; the tab can be closed. It survives browser restarts
 (`onStartup`). `src/supervise.js` reopens the session when the link or channel is gone, all
 brokers are gone, or a new client offers (one client at a time: a new one replaces the old one).
-The app tab then only shows status and log (message `bgstat`); untick to stop. The one-hop
+The app tab then only shows status and log (message `bgstat`); set it to "off" to stop. The one-hop
 executor runs in the service worker (`src/ext-port.js`: a Port, bodies as base64 chunks); the
 app tab, when it is the Host, uses it too. Extension permissions since 0013: `offscreen`,
 `storage` (the secret is kept in `chrome.storage.local`, unencrypted, like the one in
 localStorage before). Open the `?mqtt=wss://..` override in the app tab to give the background
 Host other brokers.
+
+## Same Wi-Fi, same public IP
+Two machines behind one router often get no direct path: the browsers hide local addresses
+behind mDNS names, access points can isolate clients, and the router would need NAT hairpinning.
+ICE then ends `failed` after about 15 s. The relay opens before that (8 s), and the Host keeps the
+session as long as a channel works, whatever ICE says. Status shows `link: relay` (slow but fine
+for pages). Use two different networks to test the direct path.
 
 ## Relay fallback (`src/relay.js`)
 If WebRTC finds no path (CGNAT, same NAT, UDP blocked), the same protocol runs over the signaling
@@ -75,7 +83,9 @@ side joins). The relay stays `peer.dc`. A direct channel that comes up later is 
 over sending as soon as every relay frame is acked (nothing can then arrive late, so no reordering),
 and sending falls back to the relay if it closes. Status shows `link: connected` after the switch.
 It happens at the next message after a pause, not in the middle of a long download. Every relay
-frame goes to all connected brokers (3x traffic, no single point of failure). Expect tens of KB/s
+frame goes to all connected brokers (3x traffic, no single point of failure). An idle open side
+sends a keepalive every 15 s: if its peer restarted, the new session sees a frame it does not know,
+joins and answers with OPEN, and both sides re-open. Expect tens of KB/s
 and 100s of ms.
 
 ## What the Client does like a browser (`src/browse.js`, `src/cookies.js`)
@@ -86,6 +96,9 @@ sets Cookie/Referer/Origin per request with declarativeNetRequest session rules 
 Set-Cookie and Location with webRequest (`src/host-ext.js`), because fetch() can do neither.
 The Host never uses its own cookies (`credentials: omit`) and its own cookie jar stays clean.
 Each hop passes the Host's SSRF check. Request bodies up to 150 KiB, methods GET and POST.
+Chrome's own http to https upgrade (HSTS) is an internal redirect: `fetch` shows it as an opaque
+redirect and `webRequest` reports it only through `onBeforeRedirect` (no headers event), so the
+executor also listens there and answers 307 + Location; it never returns status 0.
 
 ## Rendering layer
 `render-sw.js` (Service Worker) answers `~/<url>` requests: it asks the app tab over a

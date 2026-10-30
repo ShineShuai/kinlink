@@ -5,7 +5,7 @@ import { Peer } from './p2p.js';
 import { relayFallback } from './relay.js';
 import { attach } from './proxy.js';
 
-export const BUILD = '0014';
+export const BUILD = '0015';
 
 // One pairing session: signaling (all brokers), sealed, one Peer, the relay fallback and the
 // request protocol. Used by the app tab and by the background Host (host.js).
@@ -40,12 +40,12 @@ export async function openSession(o) {
   });
   const dead = () => { // why an unattended Host should start over, or null
     const st = peer.pc.connectionState;
+    const open = peer.dc?.readyState === 'open'; // direct or relay: it works, whatever ICE says
+    const relaying = relay.chan.active && relay.chan.readyState === 'connecting';
     if (newOffer) return 'new client';
-    if (st === 'failed' || st === 'closed') return `link ${st}`;
     if (peer.dc?.readyState === 'closed') return 'channel closed';
-    if (inner.up && !inner.up.size && peer.dc?.readyState !== 'open') {
-      return 'no signaling server';
-    }
+    if (!open && !relaying && (st === 'failed' || st === 'closed')) return `link ${st}`;
+    if (inner.up && !inner.up.size && !open && !relaying) return 'no signaling server';
     return null;
   };
   const peer = new Peer(sig, o.stun.map((urls) => ({ urls })), o.rtc);
@@ -55,7 +55,9 @@ export async function openSession(o) {
       ? 'relay' : peer.pc.connectionState,
   });
   peer.pc.addEventListener('connectionstatechange', link);
-  const relay = relayFallback(peer, inner, relayKey, { after: o.relayAfter, onlog });
+  const relay = relayFallback(peer, inner, relayKey, {
+    after: o.relayAfter, onlog, canWake: () => !dead(),
+  });
   for (const ev of ['open', 'close', 'switch']) relay.chan.addEventListener(ev, link);
   const api = attach(peer, {
     enabled: o.enabled, onlog, build: BUILD, onhello: o.onhello, exec: o.exec,
@@ -74,5 +76,5 @@ export async function openSession(o) {
     throw e;
   }
   onlog(`build ${BUILD}, room ${room.slice(0, 8)}. Host: wait. Client: Offer.`);
-  return { peer, api, stop, dead };
+  return { peer, api, relay, stop, dead };
 }

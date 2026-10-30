@@ -137,6 +137,32 @@ for (const bFirst of [false, true]) {
   b.close();
 }
 
+// The other side restarted and is not on the relay yet: A's next frame (here the idle keepalive)
+// wakes it, it answers with an OPEN, A resets and re-opens (hello again), the traffic goes on.
+{
+  const [ma, mb] = medium(11, 0.1);
+  const a = mk(ma, { keepMs: 80 });
+  const b = mk(mb);
+  b.onwake = () => b.activate();
+  let opens = 0;
+  a.onopen = () => opens++;
+  a.activate();
+  await until(() => a.readyState === 'open' && b.readyState === 'open');
+  b.close();
+  const mb2 = new Lossy(rng(12), 0.1);
+  mb2.to = [ma];
+  ma.to = [mb2];
+  const b2 = mk(mb2); // new session, not active: listens only
+  b2.onwake = () => b2.activate();
+  const got = [];
+  b2.onmessage = (e) => got.push(e.data);
+  await until(() => opens === 2 && b2.readyState === 'open'); // A's idle keepalive wakes b2
+  a.send('after restart');
+  await until(() => got.includes('after restart'));
+  a.close();
+  b2.close();
+}
+
 // Retransmit exhaustion closes the channel: the peer vanished after open.
 {
   const [ma, mb] = medium(6, 0);
@@ -253,6 +279,21 @@ const peerOn = () => Object.assign(new Peer(new SignalingAdapter()), { onlog() {
   assert.deepEqual(switches, [true, false]);
   a.close();
   b.close();
+}
+
+// A session that is over (canWake false) does not let the peer join; the peer keeps retrying.
+{
+  const [ma, mb] = medium(13, 0);
+  const [pa, pb] = [peerOn(), peerOn()];
+  let alive = false;
+  const fa = relayFallback(pa, ma, relayKey, { after: 0, ...FAST });
+  const fb = relayFallback(pb, mb, relayKey, { after: 60000, canWake: () => alive, ...FAST });
+  await sleep(200);
+  assert.ok(!fb.chan.active && !pb.dc, 'refused while canWake is false');
+  alive = true;
+  await until(() => fb.chan.active && fb.chan.readyState === 'open'); // a's next OPEN gets in
+  fa.stop();
+  fb.stop();
 }
 
 // Peer starts the relay first (its OPEN reaches a side whose own timer has not fired).
