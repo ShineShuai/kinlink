@@ -234,6 +234,8 @@ with sync_playwright() as p:
             break
         client.wait_for_timeout(200)
     check(" KB/s, " in client.inner_text(f"{box} span"), "the viewer shows frames per second")
+    check(re.search(r"q \d+, window \d", client.inner_text(f"{box} span")) is not None,
+          "the viewer shows the Host's quality and window: " + client.inner_text(f"{box} span"))
 
     def at(x, y):  # remote viewport px -> page px
         b = cv.bounding_box()

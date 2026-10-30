@@ -16,7 +16,7 @@ The Client never contacts the target site.
 3. Client: open the invite link. It connects and offers by itself, nothing to click. The offer is
    re-sent for 60 s, so it does not matter which side is first.
 4. The status line shows `signaling: 2/3 signaling servers | link: direct (srflx/srflx udp) |
-   peer: build 0020, serving yes | remote: host off`. `link` is `direct`, `relay` or the ICE
+   peer: build 0021, serving yes | remote: host off`. `link` is `direct`, `relay` or the ICE
    state; `remote` is `host allows`/`host off` (Client) or `off`/`allowed`/`in use` (Host). Then either:
    - "Open rendered": new tab at `.../kinlink/~/<url>`, a real page through the peer
      (hosted web page only; keep the app tab open). Typing `.../kinlink/~/example.com/` works too.
@@ -110,7 +110,13 @@ people you trust. Known gaps: names that resolve to private IPs (as for fetch); 
 and location prompts of the page appear on the Host; copy to the Client clipboard, file upload
 and drag and drop are missing; if the Host's screen is smaller than the viewport the picture is
 cropped; if other windows cover it, Chrome may stop painting; the frame rate depends on the link:
-the viewer's status line shows live frames per second, KB per second and KB per frame. Tested in Chromium with the real extension (click,
+the viewer's status line shows live frames per second, KB per second, KB per frame, and the
+Host's JPEG quality (`q`, 25..60) and number of frames in flight (`window`, 2..8). The Host adapts
+both from the Client's acks (`src/rbrate.js`): the window from the delay (1 frame per 50 ms, a
+high RTT needs more frames in flight), then down when frames queue up; the quality down by 8 when
+fewer than 10 frames/s get through while the page makes more, up by 4 after 5 calm seconds (a
+quality change restarts the screencast, so >= 3 s apart). Not verified on a real slow link; the
+resolution does not adapt yet, so below about 60 KB/s the picture stays slow. Tested in Chromium with the real extension (click,
 typing, SSRF block, address bar, close, through the background Host); not tested over a real
 network, with real sites, or on macOS and Windows.
 
@@ -141,8 +147,10 @@ Start: ICE `failed`, or `connecting` for 8 s (`?relay=<ms>` changes it, `?relay=
 side joins). The relay stays `peer.dc`. A direct channel that comes up later is adopted: it takes
 over sending as soon as every relay frame is acked (nothing can then arrive late, so no reordering),
 and sending falls back to the relay if it closes. Status shows `link: direct` after the switch.
-It happens at the next message after a pause, not in the middle of a long download. Every relay
-frame goes to all connected brokers (3x traffic, no single point of failure). An idle open side
+It happens at the next message after a pause, not in the middle of a long download. A frame goes to ONE
+broker: the one the peer's last frame came from (the peer is subscribed there); retransmits, OPEN
+and keepalives go to all connected brokers, so a broker that stays connected but drops costs one
+retransmit, and both sides move to a broker that works (about 1x traffic instead of 3x). An idle open side
 sends a keepalive every 15 s: if its peer restarted, the new session sees a frame it does not know,
 joins and answers with OPEN, and both sides re-open. Expect tens of KB/s
 and 100s of ms.
@@ -215,6 +223,8 @@ Local: `npm test`, `bash scripts/build-site.sh`,
   the browser-restart path are unverified. Signaling needs both sides online (no retained
   messages). Only the Host's Chrome profile must be running.
 - Relay: throughput on the real public brokers is not measured (their rate and size limits are
-  unknown); a request times out after 30 s, so big bodies fail on it. Brokers see room id, timing and volume. A malicious broker can replay
+  unknown). A request times out after 30 s without a byte from the peer (90 s on the relay), or
+  after 10 minutes in any case; slow but steady bodies survive. Brokers see room id, timing and
+  volume. A malicious broker can replay
   old frames of an earlier session (needs per-session keys). No own WSS/TURN relay yet.
 - Bodies are buffered (32 MiB max), no streaming.

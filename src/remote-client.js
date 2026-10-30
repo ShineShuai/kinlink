@@ -43,7 +43,7 @@ export function mountRemote(box, peer, { can = () => null, onlog = () => {} } = 
   let stat = ''; // live numbers: frames/s, KB/s, KB per frame
   const paint = () => { status.textContent = ` ${msg}${stat ? ` | ${stat}` : ''}`; };
   const say = (t) => { msg = t; paint(); };
-  const num = { frames: 0, bytes: 0, last: 0 };
+  const num = { frames: 0, bytes: 0, last: 0, q: 0, win: 0 };
   let meter;
   const rect = () => canvas.getBoundingClientRect();
   const viewNow = () => viewOf(rect(), view.w);
@@ -52,6 +52,7 @@ export function mountRemote(box, peer, { can = () => null, onlog = () => {} } = 
     num.frames++;
     num.bytes += blob.size;
     num.last = blob.size;
+    Object.assign(num, { q: m.q ?? 0, win: m.win ?? 0 }); // the Host's rate control (rbrate.js)
     try {
       const bmp = await createImageBitmap(blob);
       if (canvas.width !== bmp.width || canvas.height !== bmp.height) {
@@ -164,7 +165,7 @@ export function mountRemote(box, peer, { can = () => null, onlog = () => {} } = 
       clearInterval(meter);
       meter = setInterval(() => {
         stat = `${num.frames} fps, ${Math.round(num.bytes / 1024)} KB/s, `
-          + `${Math.round(num.last / 1024)} KB/frame`;
+          + `${Math.round(num.last / 1024)} KB/frame, q ${num.q}, window ${num.win}`;
         Object.assign(num, { frames: 0, bytes: 0 });
         paint();
       }, 1000);

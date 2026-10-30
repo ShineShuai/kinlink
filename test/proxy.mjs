@@ -102,6 +102,44 @@ await assert.rejects(off.fetch('https://example.com/'), /not serving/);
     { method: 'POST', body: new ArrayBuffer(200 * 1024) }), /too large/);
   await assert.rejects(c.fetch('http://127.0.0.1/', {}, { method: 'POST' }), /private/);
 }
+// A request times out after silence from the peer, not after a fixed time: a slow but alive
+// response (bytes keep coming) survives, and the relay is given longer.
+{
+  const nap = (ms) => new Promise((r) => setTimeout(r, ms));
+  const mkpair = async (host, client, relay = false) => {
+    const [X, Y] = [mk(), mk()];
+    link(X, Y);
+    link(Y, X);
+    X.dc.relay = relay;
+    const c = attach(X, { watchMs: 10, ...client });
+    attach(Y, host);
+    X.onopen();
+    Y.onopen();
+    await tick();
+    return c;
+  };
+  const head = { status: 200, url: 'https://example.com/', headers: [] };
+  const hang = async () => new Promise(() => {});
+  const trickle = async () => {
+    let n = 0;
+    return { ...head, body: new ReadableStream({
+      async pull(c) { await nap(25); if (++n > 8) c.close(); else c.enqueue(new Uint8Array(10)); },
+    }) };
+  };
+  const t0 = Date.now();
+  await assert.rejects((await mkpair({ exec: hang }, { idleMs: 60 })).fetch('https://example.com/'),
+    /timeout/);
+  assert.ok(Date.now() - t0 >= 50, 'not before the idle time');
+  const r = await (await mkpair({ exec: trickle }, { idleMs: 80 })).fetch('https://example.com/');
+  assert.equal(r.body.size, 80, 'bytes kept coming for 200 ms > idleMs 80: no timeout');
+  const late = async () => { await nap(120); return { ...head, body: null }; };
+  const relayed = await mkpair({ exec: late }, { idleMs: 40, idleRelayMs: 400 }, true);
+  assert.equal((await relayed.fetch('https://example.com/')).status, 200, 'the relay waits longer');
+  await assert.rejects((await mkpair({ exec: late }, { idleMs: 40, idleRelayMs: 400 }))
+    .fetch('https://example.com/'), /timeout/);
+  await assert.rejects((await mkpair({ exec: trickle }, { idleMs: 500, limitMs: 100 }))
+    .fetch('https://example.com/'), /timeout/); // the hard limit
+}
 const down = mk();
 down.dc.readyState = 'connecting';
 await assert.rejects(attach(down).fetch('https://example.com/'), /not connected to a peer yet/);

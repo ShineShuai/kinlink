@@ -88,6 +88,17 @@ fan.addEventListener('message', (e) => heard.push(e.data));
 await fan.send('offer');
 await new Promise((r) => setTimeout(r, 10));
 assert.deepEqual(heard, ['offer', 'offer']); // duplicates via two brokers are expected
+// events say which broker they came from; send(text, via) uses only that one while it is up
+const vias = [];
+fan.addEventListener('message', (e) => vias.push(e.via));
+await fan.send('one', 'good2');
+await new Promise((r) => setTimeout(r, 10));
+assert.deepEqual(vias, ['good2'], 'one broker only');
+vias.length = 0;
+await fan.send('two', 'dead1'); // that broker is down: all that are up
+await fan.send('three', 'nobody');
+await new Promise((r) => setTimeout(r, 10));
+assert.deepEqual(vias.sort(), ['good1', 'good1', 'good2', 'good2']);
 const allDead = new FanoutAdapter([mq('dead1'), mq('dead2')]);
 await assert.rejects(allDead.open(), /no signaling server reachable/);
 await assert.rejects(allDead.send('x'), /no signaling server connected/);

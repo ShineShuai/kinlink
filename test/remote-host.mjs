@@ -114,4 +114,26 @@ const jpeg = (n) => toB64(Uint8Array.from({ length: n }, (_, i) => i & 255));
   ports[1].dis.forEach((f) => f());
   assert.deepEqual(use, [true, false, true, false]);
 }
+// rate control: frame headers carry q and the window; a Client that shows too few frames per
+// second makes the Host ask the worker for a lower JPEG quality
+{
+  const peer = mkPeer();
+  const port = mkPort();
+  serveRemote(peer, { enabled: () => true, connect: () => port, tickMs: 20 });
+  peer.onctl('rbo', '{\"url\":\"https://a.com/\",\"q\":60}');
+  let acked = 0;
+  for (let k = 0; k < 12 && !port.out.some((m) => m.op === 'q'); k++) {
+    for (let i = 0; i < 6; i++) port.push({ frame: jpeg(100), w: 800, h: 600 }); // <= 2 get sent
+    await sleep(5);
+    for (const f of texts(peer, 'rbf')) {
+      if (f.n > acked) { peer.onctl('rbk', JSON.stringify({ n: f.n })); acked = f.n; }
+    }
+    await sleep(20);
+  }
+  const first = texts(peer, 'rbf')[0];
+  assert.equal(first.q, 60);
+  assert.equal(first.win, 2);
+  assert.deepEqual(port.out.find((m) => m.op === 'q'), { op: 'q', q: 52 });
+  peer.onctl('rbx', '{}');
+}
 console.log('remote-host ok');

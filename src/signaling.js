@@ -27,7 +27,8 @@ export class BroadcastAdapter extends SignalingAdapter {
 
 // Several adapters at once, e.g. several brokers: send on all that are up, merge what arrives.
 // open() resolves as soon as one is up; the others join later. Duplicates are expected
-// (same message via two brokers): the Peer handles them.
+// (same message via two brokers): the Peer handles them. A received event has `via` (the name of
+// the broker it came from); send(text, via) uses only that broker while it is up (relay.js).
 export class FanoutAdapter extends SignalingAdapter {
   onlog = () => {};
   up = new Set();
@@ -35,8 +36,12 @@ export class FanoutAdapter extends SignalingAdapter {
   constructor(named) { // [[name, adapter], ...]
     super();
     this.named = named;
-    for (const [, a] of named) {
-      a.addEventListener('message', (e) => this.emit(e.data));
+    for (const [name, a] of named) {
+      a.addEventListener('message', (e) => {
+        const ev = new MessageEvent('message', { data: e.data });
+        ev.via = name;
+        this.dispatchEvent(ev);
+      });
       a.addEventListener('close', () => { this.up.delete(a); this.changed(); });
     }
   }
@@ -63,9 +68,11 @@ export class FanoutAdapter extends SignalingAdapter {
     });
   }
 
-  async send(text) {
+  async send(text, via) {
     if (!this.up.size) throw new Error('no signaling server connected');
-    await Promise.allSettled([...this.up].map((a) => a.send(text)));
+    const one = via && this.named.find(([name]) => name === via)?.[1];
+    const to = one && this.up.has(one) ? [one] : [...this.up];
+    await Promise.allSettled(to.map((a) => a.send(text)));
   }
 
   async close() { await Promise.allSettled(this.named.map(([, a]) => a.close())); }

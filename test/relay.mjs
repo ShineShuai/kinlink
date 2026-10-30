@@ -360,5 +360,52 @@ const peerOn = () => Object.assign(new Peer(new SignalingAdapter()), { onlog() {
   fa.stop();
   fb.stop();
 }
+// Load: after the handshake a frame goes to one broker only (where the peer's last frame came
+// from); retransmits go to all, so a broker that silently drops costs a retransmit, not the link.
+{
+  const { FanoutAdapter } = await import('../src/signaling.js');
+  const pubs = { X: 0, Y: 0 };
+  const dead = { X: false };
+  class Br extends SignalingAdapter { // one side's connection to one broker
+    constructor(name) { super(); this.name = name; }
+    async send(text) {
+      pubs[this.name]++;
+      if (dead[this.name]) return;
+      setTimeout(() => this.other.emit(text), 1); // to the other side only: no echo
+    }
+  }
+  const side = () => new FanoutAdapter([['X', new Br('X')], ['Y', new Br('Y')]]);
+  const [fa, fb] = [side(), side()];
+  for (const n of [0, 1]) {
+    fa.named[n][1].other = fb.named[n][1];
+    fb.named[n][1].other = fa.named[n][1];
+  }
+  await Promise.all([fa.open(), fb.open()]);
+  await sleep(5);
+  const [a, b] = [mk(fa), mk(fb)];
+  const got = [];
+  b.onmessage = (e) => got.push(e.data);
+  a.activate();
+  b.activate();
+  await until(() => a.readyState === 'open' && b.readyState === 'open');
+  assert.ok(a.pref && b.pref, `the handshake teaches each side a broker: ${a.pref} ${b.pref}`);
+  await sleep(100); // acks and keepalives of the handshake settle
+  const [x0, y0] = [pubs.X, pubs.Y];
+  for (let i = 0; i < 20; i++) a.send(`m${i}`);
+  await until(() => got.length === 20 && a.flight.size === 0);
+  const [dx, dy] = [pubs.X - x0, pubs.Y - y0];
+  assert.ok(Math.min(dx, dy) === 0 && Math.max(dx, dy) >= 20, `one broker carried it: ${dx} ${dy}`);
+
+  // the preferred broker stops delivering (it stays "connected"): retransmits find the other one
+  dead[a.pref] = true;
+  const live = a.pref === 'X' ? 'Y' : 'X';
+  for (let i = 20; i < 30; i++) a.send(`m${i}`);
+  await until(() => got.length === 30 && a.flight.size === 0);
+  assert.deepEqual(got, Array.from({ length: 30 }, (_, i) => `m${i}`));
+  assert.equal(a.pref, live);
+  assert.equal(b.pref, live, 'and both sides moved to it');
+  a.close();
+  b.close();
+}
 clearInterval(keep);
 console.log('relay ok');

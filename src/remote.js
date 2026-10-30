@@ -4,8 +4,9 @@ import { blocked } from './proxy.js';
 // DataChannel ops, all JSON after "op:" unless noted. Client -> Host:
 //   rbo {url,w,h,q} open | rbi {t,..} input | rbn {a,url} go/back/forward/reload | rbs {w,h} resize
 //   rbk {n} frame shown (flow control) | rbx {} close
-// Host -> Client: rbm {url,title,loading} | rbf {n,len,w,h} then binary [u32 RB_ID][<= 16 KiB]
-//   chunks of one JPEG | rbe {message} | rbc {} closed
+// Host -> Client: rbm {url,title,loading} | rbf {n,len,w,h,q,win} (q, win: the Host's rate control,
+//   src/rbrate.js) then binary [u32 RB_ID][<= 16 KiB] chunks of one JPEG | rbe {message} |
+//   rbc {} closed
 // Frame chunks use binary id RB_ID; proxy.js ids are always >= 2.
 // Optional extension permission the Host grants for the remote browser (with the host access).
 // "debugger" cannot be optional in Chrome: it is in the manifest.

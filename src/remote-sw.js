@@ -145,6 +145,11 @@ async function start(m, send) {
       if (e) await cdp(s.tabId, 'Page.navigateToHistoryEntry', { entryId: e.id });
     }
   };
+  s.recast = async (q) => { // the Host's rate control asks for another JPEG quality
+    s.q = Math.min(90, Math.max(20, Math.round(q) || s.q));
+    await cdp(s.tabId, 'Page.stopScreencast');
+    await cast();
+  };
   s.resize = async (d) => {
     Object.assign(s, size(d.w, d.h));
     await cdp(s.tabId, 'Page.stopScreencast');
@@ -174,6 +179,8 @@ export function servePortRemote(port) {
         await s.nav(m);
       } else if (m.op === 'size') {
         await s.resize(m);
+      } else if (m.op === 'q') {
+        await s.recast(m.q);
       }
     } catch (e) {
       send({ error: e.message });

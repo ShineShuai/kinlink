@@ -5,6 +5,10 @@ import { openBytes, sealBytes } from './crypto.js';
 // is a small ARQ: sequence numbers, cumulative acks, a send window, retransmit with backoff.
 // RelayChannel mimics the RTCDataChannel subset that Peer and proxy.js use.
 //
+// Load: a frame goes to ONE broker, the one the peer's last frame came from (pref: the peer is
+// subscribed there). Retransmits, OPEN and keepalives go to all brokers: a broker that silently
+// drops costs one RTO, not the link. Without a pref yet (handshake) everything goes to all.
+//
 // Frame (sealed with the relay key): [type u8][sid u32][seq u32][flags u8][payload]
 //   OPEN: handshake, repeated until the peer answers (flags bit0 = a reply, not answered again).
 //   DATA: seq = frame number, flags bit0 = last fragment of a message, bit1 = binary message.
@@ -44,6 +48,7 @@ export class RelayChannel extends EventTarget {
   active = false; // false: only listening; a peer's OPEN wakes it (see onwake)
   sid = crypto.getRandomValues(new Uint32Array(1))[0];
   peerSid = null;
+  pref = null; // name of the broker the peer's last frame came from (FanoutAdapter), or null
   echoed = 0;
   seen = new Set(); // recent frame texts (see fresh)
   old = new Set(); // peer session ids replaced by a restart: late duplicates of those are dropped
@@ -65,8 +70,8 @@ export class RelayChannel extends EventTarget {
     this.onlog = onlog;
     Object.assign(this, { inner, key, tickMs, rtoMs, openMs, keepMs });
     this.lastSent = 0;
-    this.xmit = send ?? ((text) => inner.send(text));
-    this.listener = (e) => this.hear(e.data);
+    this.xmit = send ?? ((text, via) => inner.send(text, via));
+    this.listener = (e) => this.hear(e.data, e.via);
     inner.addEventListener('message', this.listener);
   }
 
@@ -89,12 +94,12 @@ export class RelayChannel extends EventTarget {
     return true;
   }
 
-  async put(bytes) { // best effort: loss is handled by retransmission
+  async put(bytes, all = false) { // best effort: loss is handled by retransmission
     this.lastSent = Date.now();
     try {
       const text = await sealBytes(this.key, bytes);
       this.fresh(text); // our own copy, when it comes back
-      await this.xmit(text);
+      await this.xmit(text, all ? undefined : this.pref ?? undefined);
     } catch { /* no broker up right now */ }
   }
 
@@ -104,13 +109,13 @@ export class RelayChannel extends EventTarget {
       if (now - this.t0 > this.openMs) return this.shut();
       if (now - this.lastOpen >= 2 * this.tickMs) {
         this.lastOpen = now;
-        this.put(pack(OPEN, this.sid, 0));
+        this.put(pack(OPEN, this.sid, 0), true);
       }
     }
     // Keepalive: an idle side that lost its peer (it restarted) finds out: the new session sees a
     // frame it does not know, joins and sends OPEN, we reset and re-open.
     if (this.readyState === 'open' && now - this.lastSent >= this.keepMs) {
-      this.put(pack(ACK, this.sid, this.expect));
+      this.put(pack(ACK, this.sid, this.expect), true);
     }
     let n = 0;
     for (const [seq, fl] of this.flight) {
@@ -118,12 +123,12 @@ export class RelayChannel extends EventTarget {
       if (fl.tries >= 10) return this.shut();
       fl.tries++;
       fl.at = now;
-      this.put(fl.bytes);
+      this.put(fl.bytes, true);
       if (++n >= 4) break; // oldest first; the rest wait for the next tick
     }
   }
 
-  async hear(text) {
+  async hear(text, via) {
     if (this.readyState === 'closed' || !this.fresh(text)) return;
     let f;
     try { f = unpack(await openBytes(this.key, text)); } catch { return; } // foreign or forged
@@ -132,6 +137,7 @@ export class RelayChannel extends EventTarget {
       return;
     }
     if (this.old.has(f.sid)) return;
+    if (via) this.pref = via; // first copy of a frame of the peer: its fastest broker
     if (!this.active) { // the peer uses the relay: join it. Frames other than OPEN come from a
       this.onwake?.(); // session that lost us (we restarted): joining sends our OPEN, so it resets
       if (!this.active) return;

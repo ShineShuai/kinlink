@@ -5,6 +5,9 @@
 //   text "fin:{id}" | "err:{id,message}"         end of response | failure
 const CHUNK = 16 * 1024 - 4;
 const MAX = 32 << 20;
+const IDLE = 30000; // a request fails after this long without a byte from the peer ...
+const IDLE_RELAY = 90000; // ... longer on the broker relay (slow, bursty)
+const LIMIT = 10 * 60000; // ... and after this long in any case
 const MAX_BODY = 150 * 1024; // a request is one DataChannel message (limit 256 KiB with base64)
 const ALLOW = new Set(['accept', 'accept-language', 'range', 'content-type']);
 export const toB64 = (buf) => {
@@ -44,6 +47,7 @@ export function blocked(urlStr) {
 export function attach(peer, opts = {}) {
   const { enabled = () => true, onlog = () => {}, onhello = () => {}, build = '?' } = opts;
   const { helloMs = 500, helloMax = 20, exec = defaultExec } = opts;
+  const { idleMs = IDLE, idleRelayMs = IDLE_RELAY, limitMs = LIMIT, watchMs = 1000 } = opts;
   const pending = new Map();
   let n = 0;
   let remote = null; // peer's last hello
@@ -119,11 +123,30 @@ export function attach(peer, opts = {}) {
     if (op === 'req') return void serve(m).catch(onlog);
     const p = pending.get(m.id);
     if (!p) return;
+    p.at = Date.now();
     if (op === 'res') p.head = m;
     else if (op === 'fin') { pending.delete(m.id); p.ok({ ...p.head, body: new Blob(p.chunks) }); }
     else if (op === 'err') { pending.delete(m.id); p.fail(new Error(m.message)); }
   };
-  peer.onbin = (buf) => pending.get(new DataView(buf).getUint32(0))?.chunks.push(buf.slice(4));
+  peer.onbin = (buf) => {
+    const p = pending.get(new DataView(buf).getUint32(0));
+    if (!p) return;
+    p.at = Date.now();
+    p.chunks.push(buf.slice(4));
+  };
+  // Fails a request that got nothing for a while (not one that is slow but alive).
+  const watch = (id) => {
+    const t = setInterval(() => {
+      const p = pending.get(id);
+      const now = Date.now();
+      const idle = peer.dc?.relay && !peer.dc.useAlt ? idleRelayMs : idleMs;
+      if (!p) return clearInterval(t);
+      if (now - p.at < idle && now - p.t0 < limitMs) return undefined;
+      clearInterval(t);
+      pending.delete(id);
+      return p.fail(new Error('timeout'));
+    }, watchMs);
+  };
 
   return {
     hello,
@@ -141,9 +164,9 @@ export function attach(peer, opts = {}) {
       const id = 2 * ++n + (peer.initiator ? 1 : 0); // initiator odd, other side even
       const { body, ...rest } = opts;
       if (body?.byteLength > MAX_BODY) return fail(new Error('request body too large'));
-      pending.set(id, { chunks: [], ok, fail });
+      pending.set(id, { chunks: [], ok, fail, t0: Date.now(), at: Date.now() });
       say('req', { id, url, headers, ...rest, body: body?.byteLength ? toB64(body) : undefined });
-      setTimeout(() => pending.delete(id) && fail(new Error('timeout')), 30000)?.unref?.();
+      watch(id);
     }),
   };
 }
