@@ -7,8 +7,9 @@ const HOST_OPS = new Set(['rbo', 'rbi', 'rbn', 'rbs', 'rbk', 'rbx']); // the res
 // Host side bridge in the page that owns the peer (app tab or offscreen document): DataChannel ops
 // <-> one Port to the service worker (src/remote-sw.js, it has chrome.debugger). Only the newest
 // frame is kept: a slow link gets fewer frames, not a growing delay.
-// opts: { enabled(): bool, connect(): Port, onlog }. Chains onto peer.onctl / peer.onbin.
-export function serveRemote(peer, { enabled, connect, onlog = () => {} }) {
+// opts: { enabled(): bool, connect(): Port, onlog, onuse(bool): a remote browser is open }.
+// Chains onto peer.onctl / peer.onbin.
+export function serveRemote(peer, { enabled, connect, onlog = () => {}, onuse = () => {} }) {
   let port = null;
   let latest = null; // { u8, w, h }
   let inflight = 0;
@@ -23,6 +24,7 @@ export function serveRemote(peer, { enabled, connect, onlog = () => {} }) {
     const p = port;
     port = latest = null;
     inflight = 0;
+    onuse(false);
     try { p.disconnect(); } catch { /* already gone */ }
     if (tell) say('rbc', {});
   };
@@ -57,6 +59,7 @@ export function serveRemote(peer, { enabled, connect, onlog = () => {} }) {
     }
     onlog(`remote: open ${m.url}`);
     port = connect();
+    onuse(true);
     const mine = port;
     mine.onMessage.addListener((r) => {
       if (port !== mine) return;

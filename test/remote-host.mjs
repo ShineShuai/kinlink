@@ -97,4 +97,21 @@ const jpeg = (n) => toB64(Uint8Array.from({ length: n }, (_, i) => i & 255));
   await sleep(5);
   assert.equal(texts(peer, 'rbf').length, 0);
 }
+// onuse: true while a remote browser is open, false after every way of closing
+{
+  const peer = mkPeer();
+  const ports = [];
+  const use = [];
+  serveRemote(peer, {
+    enabled: () => true, connect: () => ports[ports.push(mkPort()) - 1], onuse: (u) => use.push(u),
+  });
+  peer.onctl('rbo', '{"url":"https://a.com/"}');
+  assert.deepEqual(use, [true]);
+  peer.onctl('rbx', '{}');
+  assert.deepEqual(use, [true, false]);
+  peer.onctl('rbx', '{}'); // nothing open: no second false
+  peer.onctl('rbo', '{"url":"https://a.com/"}');
+  ports[1].dis.forEach((f) => f());
+  assert.deepEqual(use, [true, false, true, false]);
+}
 console.log('remote-host ok');

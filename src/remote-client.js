@@ -159,7 +159,7 @@ export function mountRemote(box, peer, { can = () => null, onlog = () => {} } = 
       view = fit();
       url.value = addressUrl(target);
       live = true;
-      say('opening…');
+      say('opening… (the host sees this window)');
       send('rbo', { url: url.value, ...view, q: 60 });
       clearInterval(meter);
       meter = setInterval(() => {

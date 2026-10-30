@@ -132,15 +132,22 @@ export class Peer {
     const k = d.indexOf(':');
     const op = d.slice(0, k);
     const arg = d.slice(k + 1);
-    if (op === 'ping') this.dc.send(`pong:${arg}`);
+    if (op === 'ping') this.say(`pong:${arg}`);
     else if (op === 'pong') this.onrtt?.(performance.now() - Number(arg));
     else if (op === 'start') this.rx = 0;
-    else if (op === 'end') this.dc.send(`ack:${this.rx}`);
+    else if (op === 'end') this.say(`ack:${this.rx}`);
     else if (op === 'ack') this.acked?.(Number(arg));
     else this.onctl?.(op, arg);
   }
 
-  ping() { this.dc.send(`ping:${performance.now()}`); }
+  // Control text; dropped (false) while the channel is not open, e.g. after the link failed.
+  say(text) {
+    if (this.dc?.readyState !== 'open') return false;
+    this.dc.send(text);
+    return true;
+  }
+
+  ping() { this.say(`ping:${performance.now()}`); }
 
   async tx(data) { // send with backpressure
     if (this.dc.bufferedAmount > HIGH) {

@@ -1,6 +1,6 @@
 import { BroadcastAdapter, ManualAdapter } from './src/signaling.js';
 import { Peer } from './src/p2p.js';
-import { CFG, runProbes } from './src/diag.js';
+import { CFG, pickStun, runProbes } from './src/diag.js';
 import { MqttWssAdapter } from './src/mqtt.js';
 import { SealedAdapter, derive, newSecret } from './src/crypto.js';
 
@@ -51,7 +51,9 @@ async function init() {
     await sig.open();
     log(`mqtt: subscribed, room ${room.slice(0, 8)} (open this URL on the other side)`);
   }
-  peer = new Peer(sig, [{ urls: q.get('stun') ?? CFG.stun[0] }]);
+  const stun = q.has('stun') ? [q.get('stun')] : (await pickStun(CFG.stun)).up;
+  log(`stun: ${stun.join(', ')}`);
+  peer = new Peer(sig, stun.map((urls) => ({ urls })));
   peer.onlog = log;
   peer.onrtt = (ms) => { rtts.push(ms); stats.recv++; stats.max = Math.max(stats.max, ms); };
   window.kinlink.peer = peer;

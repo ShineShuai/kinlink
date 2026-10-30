@@ -20,6 +20,14 @@ const num = (v, lo, hi, d = lo) => {
 const str = (v, n) => (typeof v === 'string' ? v.slice(0, n) : '');
 export const size = (w, h) => ({ w: num(w, 200, 2560, 1024), h: num(h, 200, 1600, 640) });
 
+// Status phrase for the remote browser, the same words on both sides. The Client's hello always
+// says remote: false, so "peer allows" identifies the Client side.
+export const rbWord = ({ peerServes, peerRemote, allowed, using }) => {
+  if (peerRemote) return 'remote: host allows';
+  if (peerServes) return 'remote: host off';
+  return `remote: ${allowed ? (using ? 'in use' : 'allowed') : 'off'}`;
+};
+
 // The remote browser may only load web pages, and the same SSRF rules as the fetch executor apply.
 export const urlProblem = (u) => {
   return typeof u === 'string' && u.length < 8192 ? blocked(u) : 'bad url';

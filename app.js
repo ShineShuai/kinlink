@@ -2,7 +2,7 @@ import { newSecret } from './src/crypto.js';
 import { Peer } from './src/p2p.js';
 import { BUILD, openSession } from './src/session.js';
 import { mountRemote } from './src/remote-client.js';
-import { PERMS as RB_PERMS } from './src/remote.js';
+import { PERMS as RB_PERMS, rbWord } from './src/remote.js';
 import { CFG } from './src/diag.js';
 import { canRender, renderedUrl, startBridge } from './src/bridge.js';
 import { Jar } from './src/cookies.js';
@@ -39,11 +39,15 @@ const browse = () => api && browser(api, jar);
 const hostExec = isExt && !!chrome.runtime.connect;
 const state = { sig: 'signaling: -', link: 'new', peer: 'peer: not connected' };
 const paint = () => {
-  $('status').textContent = `${state.sig} | link: ${state.link} | ${state.peer}`;
+  const rb = rbWord({
+    peerServes: state.peerServes, peerRemote: state.peerRemote,
+    allowed: $('remote').checked, using: state.using,
+  });
+  $('status').textContent = `${state.sig} | link: ${state.link} | ${state.peer} | ${rb}`;
 };
 const showPeer = (m) => {
-  const rb = m.remote ? ', remote yes' : '';
-  state.peer = `peer: build ${m.build}, serving ${m.serving ? 'yes' : 'no'}${rb}`;
+  Object.assign(state, { peerServes: !!m.serving, peerRemote: !!m.remote });
+  state.peer = `peer: build ${m.build}, serving ${m.serving ? 'yes' : 'no'}`;
   paint();
 };
 // ?mqtt=wss://a,wss://b overrides the broker list (tests, own broker).
@@ -154,6 +158,7 @@ $('remote').onchange = async (e) => {
       await chrome.runtime.sendMessage({ kl: 'bg', on: true, secret, brokers: q });
     }
     api?.hello();
+    paint();
   } catch (err) {
     e.target.checked = !on;
     log(`err: ${err.message}`);
@@ -167,10 +172,11 @@ async function connect() {
   viewer?.close();
   session?.stop();
   session = peer = api = viewer = undefined;
+  Object.assign(state, { peerServes: undefined, peerRemote: undefined, using: false });
   session = await openSession({
     secret,
     brokers: brokers(),
-    stun: CFG.stun.slice(0, 4),
+    stun: CFG.stun, // probed: the ones that answer are used (pickStun)
     signaling,
     relayAfter,
     rtc,

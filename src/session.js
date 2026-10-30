@@ -5,18 +5,28 @@ import { Peer } from './p2p.js';
 import { relayFallback } from './relay.js';
 import { attach } from './proxy.js';
 import { serveRemote } from './remote-host.js';
+import { pickStun } from './diag.js';
 
-export const BUILD = '0018';
+export const BUILD = '0019';
 
 // One pairing session: signaling (all brokers), sealed, one Peer, the relay fallback and the
 // request protocol. Used by the app tab and by the background Host (host.js).
 // o: { secret, brokers, stun, rtc (RTCConfiguration extras), signaling ('mqtt' | 'bc'), relayAfter,
 //      enabled, exec, remote ({ enabled(), connect() }: the remote browser, Host only), onlog,
-//      onhello, onstate({ sig, link, peer }) }
+//      onhello, onstate({ sig, link, peer, using }), probe (default true: only STUN servers that
+//      answer go to the Peer, see pickStun) }
 // Returns { peer, api, stop, dead() }; dead() says why an unattended Host should start over.
 export async function openSession(o) {
   const { onlog = () => {}, onstate = () => {} } = o;
   const { room, sigKey, relayKey } = await derive(o.secret);
+  // Before any adapter exists: no message can arrive while this waits (a few 100 ms at most).
+  let stun = o.stun;
+  if (o.probe !== false && stun.length) {
+    const r = await pickStun(stun);
+    stun = r.up;
+    const up = r.rows.filter((x) => x.ok).map((x) => `${new URL(x.url).host} ${x.ms} ms`);
+    onlog(`stun: ${r.answered}/${r.rows.length} answered${up.length ? `: ${up.join(', ')}` : ''}`);
+  }
   let inner;
   if (o.signaling === 'bc') {
     inner = new BroadcastAdapter(`kinlink-${room}`);
@@ -49,12 +59,20 @@ export async function openSession(o) {
     if (inner.up && !inner.up.size && !open && !relaying) return 'no signaling server';
     return null;
   };
-  const peer = new Peer(sig, o.stun.map((urls) => ({ urls })), o.rtc);
+  const peer = new Peer(sig, stun.map((urls) => ({ urls })), o.rtc);
   peer.onlog = onlog;
-  const link = () => onstate({
-    link: peer.dc?.relay && peer.dc.readyState === 'open' && !peer.dc.useAlt
-      ? 'relay' : peer.pc.connectionState,
-  });
+  // link: relay | direct (selected path, e.g. srflx/srflx udp) | the ICE state
+  const link = () => {
+    const relayed = peer.dc?.relay && peer.dc.readyState === 'open' && !peer.dc.useAlt;
+    const st = peer.pc.connectionState;
+    onstate({ link: relayed ? 'relay' : st === 'connected' ? 'direct' : st });
+    if (relayed || st !== 'connected') return;
+    peer.path().then((p) => {
+      if (p && peer.pc.connectionState === 'connected' && (!peer.dc?.relay || peer.dc.useAlt)) {
+        onstate({ link: `direct (${p})` });
+      }
+    }).catch(() => {});
+  };
   peer.pc.addEventListener('connectionstatechange', link);
   const relay = relayFallback(peer, inner, relayKey, {
     after: o.relayAfter, onlog, canWake: () => !dead(),
@@ -64,7 +82,9 @@ export async function openSession(o) {
     enabled: o.enabled, onlog, build: BUILD, onhello: o.onhello, exec: o.exec,
     hello: () => ({ remote: !!o.remote?.enabled() }),
   });
-  const rb = o.remote && serveRemote(peer, { ...o.remote, onlog }); // Host: remote browser
+  const rb = o.remote && serveRemote(peer, { // Host: remote browser
+    ...o.remote, onlog, onuse: (using) => onstate({ using }),
+  });
   onstate({ link: 'new', peer: 'peer: not connected' });
   const stop = () => {
     rb?.stop();

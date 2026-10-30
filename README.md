@@ -15,8 +15,9 @@ The Client never contacts the target site.
    keep the tab open, you see the log live. "off": this browser only browses.)
 3. Client: open the invite link. It connects and offers by itself, nothing to click. The offer is
    re-sent for 60 s, so it does not matter which side is first.
-4. The status line shows `signaling: 2/3 signaling servers | link: connected | peer: build
-   0018, serving yes`. Then either:
+4. The status line shows `signaling: 2/3 signaling servers | link: direct (srflx/srflx udp) |
+   peer: build 0019, serving yes | remote: host off`. `link` is `direct`, `relay` or the ICE
+   state; `remote` is `host allows`/`host off` (Client) or `off`/`allowed`/`in use` (Host). Then either:
    - "Open rendered": new tab at `.../kinlink/~/<url>`, a real page through the peer
      (hosted web page only; keep the app tab open). Typing `.../kinlink/~/example.com/` works too.
    - "Fetch via peer": script-free preview in this page (also works in the extension page).
@@ -41,7 +42,10 @@ If it does not connect (the log says where it stops):
   hint. `host 0` or `srflx 0` usually means a WebRTC privacy extension or policy. Both sides
   behind one public IP (e.g. two tabs on one machine) often fails: Chrome hides local IPs
   (mDNS) and many routers do not hairpin NAT. Test from two different networks.
-- Link `connected` but `no hello`: one side runs old code. Reload the extension and all tabs.
+- `stun: 3/5 answered: ..` in the log: only STUN servers that answer here go to WebRTC (one that
+  never answers, e.g. google in China, left the gathering without a server-reflexive candidate).
+  `diag.html` picks its server the same way.
+- Link `direct` or `relay` but `no hello`: one side runs old code. Reload the extension and all tabs.
 
 Signaling is always MQTT (all brokers at once, nothing to choose). `?signaling=bc` is a dev-only
 shortcut: BroadcastChannel between two tabs of one browser and one origin, no network; it is
@@ -79,19 +83,25 @@ Host setup (extension page): reload the extension (it needs the permission `debu
 manifest: Chrome does not allow it as an optional one), turn on "Allow in Incognito" for Kinlink in
 `chrome://extensions`, then tick "allow the remote browser" (asks for `webNavigation`, which
 catches new tabs of the remote page). It works with
-"in this tab" and "in background". Client: Open in remote browser, status shows `remote yes`.
+"in this tab" and "in background". Client: Open in remote browser, status shows `remote: host allows`.
 Parts: `src/remote-client.js` (viewer), `src/remote-host.js` (DataChannel <-> Port, keeps only the
 newest frame, 2 frames in flight, acked by the viewer), `src/remote-sw.js` (the window, CDP
 screencast and input), `src/remote.js` (protocol, input validation, URL policy).
-Safety: the window is **incognito**, so the Client never sees the Host's logins (without "Allow in
-Incognito" it refuses; `chrome.storage.local` `remote.unsafeProfile` is a test-only escape). Only
+Safety: the window is **incognito**, so the Client never sees the Host's logins. All incognito
+windows of a profile share one cookie jar, so the remote browser refuses to start while another
+Incognito window is open, ends when the Host opens one, and closing its window wipes the jar
+(without "Allow in Incognito" it refuses; `chrome.storage.local` `remote.unsafeProfile` is a test-only escape). Only
 http(s) pages; the same SSRF check as the fetch executor for typed URLs, plus six
 declarativeNetRequest rules that block every request of that tab to private, loopback and
 link-local addresses (also for navigations and redirects of the tab); a tab that still ends on a
 disallowed URL is sent to about:blank; downloads are denied (CDP, not tested); new tabs and
 popups (they open in the Host's normal window, outside the block rules) are closed at once and the
-same tab navigates instead; one remote browser at a time. Chrome shows its "is being debugged" banner in that window, so the Host
-user sees it. Known gaps: names that resolve to private IPs (as for fetch); camera, microphone
+same tab navigates instead; one remote browser at a time. The tab is muted (no audio crosses; a screencast has none). Chrome shows its "is being
+debugged" banner in that window, so the Host user sees it.
+**The Host sees everything the Client does in that window** (pages, typed text, passwords shown),
+and can click in it; closing it ends the session. It is a shared screen, not a hidden browser.
+The rewritten view is no better: the Host fetches every URL and sees its cookies. Pair only with
+people you trust. Known gaps: names that resolve to private IPs (as for fetch); camera, microphone
 and location prompts of the page appear on the Host; copy to the Client clipboard, file upload
 and drag and drop are missing; if the Host's screen is smaller than the viewport the picture is
 cropped; if other windows cover it, Chrome may stop painting; the frame rate depends on the link:
@@ -125,7 +135,7 @@ Start: ICE `failed`, or `connecting` for 8 s (`?relay=<ms>` changes it, `?relay=
 `?ice=relay` blocks the direct path, both for tests), or the peer's OPEN frame arrives (then this
 side joins). The relay stays `peer.dc`. A direct channel that comes up later is adopted: it takes
 over sending as soon as every relay frame is acked (nothing can then arrive late, so no reordering),
-and sending falls back to the relay if it closes. Status shows `link: connected` after the switch.
+and sending falls back to the relay if it closes. Status shows `link: direct` after the switch.
 It happens at the next message after a pause, not in the middle of a long download. Every relay
 frame goes to all connected brokers (3x traffic, no single point of failure). An idle open side
 sends a keepalive every 15 s: if its peer restarted, the new session sees a frame it does not know,

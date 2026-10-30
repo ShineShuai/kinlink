@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Kinlink (dev)",
-  "version": "0.18.0",
+  "version": "0.19.0",
   "description": "Dev build: a paired peer can fetch URLs through this browser.",
   "action": {
     "default_title": "Open Kinlink"
@@ -23,5 +23,5 @@
   "optional_permissions": [
     "webNavigation"
   ],
-  "version_name": "0018"
+  "version_name": "0019"
 }

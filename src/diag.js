@@ -39,6 +39,27 @@ const gatherSrflx = (urls, ms, firstOnly) => new Promise((res, rej) => {
   pc.createOffer().then((o) => pc.setLocalDescription(o));
 });
 
+// STUN servers that answer here, fastest first (at most `max`). One that never answers (google in
+// China) stalls the real connection's gathering, so the Peer only gets responders. Returns as soon
+// as `max` answered; none answered: the first two as they are (UDP blocked: nothing helps).
+export async function pickStun(urls, ms = 1500, max = 3) {
+  const up = [];
+  const rows = [];
+  await new Promise((done) => {
+    if (!urls.length) return done();
+    const t = setTimeout(done, ms + 200);
+    for (const url of urls) {
+      const t0 = performance.now();
+      gatherSrflx([url], ms, true).then(() => true, () => false).then((ok) => {
+        rows.push({ url, ok, ms: Math.round(performance.now() - t0) });
+        if (ok) up.push(url);
+        if (up.length >= max || rows.length === urls.length) { clearTimeout(t); done(); }
+      });
+    }
+  });
+  return { up: up.length ? up : urls.slice(0, 2), rows, answered: up.length };
+}
+
 const wsProbe = (url, proto, ms) => new Promise((res, rej) => {
   const ws = new WebSocket(url, proto);
   const done = (f, v) => { clearTimeout(t); ws.close(); f(v); };

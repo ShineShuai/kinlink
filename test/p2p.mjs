@@ -131,4 +131,18 @@ assert.deepEqual(candidates(), { host: 0, mdns: 0, srflx: 0, relay: 0, srflxIps:
   await p.explain();
   assert.match(logs.join('\n'), /no STUN answer/);
 }
+// A failed link must not throw from timers (ping) or from a late ping/end message
+{
+  const p = new Peer(new Wire());
+  const boom = () => { throw new Error('RTCDataChannel.readyState is not open'); };
+  p.dc = { readyState: 'closed', send: boom };
+  p.ping();
+  p.onmsg('ping:1');
+  p.onmsg('end:');
+  assert.equal(p.say('x'), false);
+  const sent = [];
+  p.dc = { readyState: 'open', send: (t) => sent.push(t) };
+  p.onmsg('ping:7');
+  assert.deepEqual(sent, ['pong:7']);
+}
 console.log('p2p ok');

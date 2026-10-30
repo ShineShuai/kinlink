@@ -2,7 +2,8 @@ import { PERMS, cdpInput, size, urlProblem } from './remote.js';
 
 // Remote browser, service worker side: a popup window of the Host's browser, driven with
 // chrome.debugger (screencast out, input in). Runs in the worker only.
-// Safety: incognito window (own cookie jar: the Client must not reach the Host's logins), http(s)
+// Safety: incognito window (own cookie jar: the Client must not reach the Host's logins; all
+// incognito windows of a profile share one jar, so it only runs while it is the only one), http(s)
 // to non-private hosts only (every request of the tab, via declarativeNetRequest), downloads
 // denied, extra windows closed. The Chrome debugging banner stays visible to the Host user.
 const TYPES = ['main_frame', 'sub_frame', 'stylesheet', 'script', 'image', 'font', 'object',
@@ -35,6 +36,13 @@ async function start(m, send) {
       + 'remote browser runs there, so it cannot see your logins');
   }
   await active?.close();
+  if (incognito) { // one jar for all incognito windows: the Client would get the Host's logins
+    const other = (await chrome.windows.getAll()).some((w) => w.incognito);
+    if (other) {
+      throw new Error('host: close your other Incognito windows first: they share one cookie '
+        + 'jar with the remote browser (your logins). Closing the remote window wipes it');
+    }
+  }
   const q = Math.min(90, Math.max(20, Math.round(m.q) || 60));
   const s = { ...size(m.w, m.h), q, closed: false };
   active = s;
@@ -75,6 +83,7 @@ async function start(m, send) {
     });
     s.winId = win.id;
     s.tabId = win.tabs[0].id;
+    chrome.tabs.update(s.tabId, { muted: true }).catch(() => {}); // no audio crosses anyway
     await chrome.declarativeNetRequest.updateSessionRules({ addRules: PRIVATE.map((re, i) => ({
       id: rules[i], priority: 1, action: { type: 'block' },
       condition: { regexFilter: re, tabIds: [s.tabId], resourceTypes: TYPES },
@@ -88,6 +97,18 @@ async function start(m, send) {
     });
     listen(chrome.debugger.onDetach, (src) => src.tabId === s.tabId && gone());
     listen(chrome.windows.onRemoved, (id) => id === s.winId && gone());
+    // The Host opened an Incognito window of their own: it shares the jar. A popup of the page
+    // is closed by the handler below within the delay (the window is gone then).
+    if (incognito) {
+      listen(chrome.windows.onCreated, (w) => {
+        if (!w.incognito || w.id === s.winId) return;
+        setTimeout(async () => {
+          if (s.closed || !(await chrome.windows.get(w.id).catch(() => null))) return;
+          send({ error: 'the host opened another Incognito window: session ended' });
+          gone();
+        }, 500);
+      });
+    }
     listen(chrome.tabs.onUpdated, (id, info, tab) => {
       if (id !== s.tabId || !(info.url || info.title || info.status)) return;
       send({ meta: { url: tab.url, title: tab.title, loading: tab.status === 'loading' } });

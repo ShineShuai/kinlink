@@ -87,10 +87,10 @@ def pair(browser, client_first, relay=None):
     if relay == "then-direct":  # the direct channel opened late; the next request may use it
         for _ in range(60):
             view.reload()
-            if "link: connected" in client.evaluate(status):
+            if "link: direct" in client.evaluate(status):
                 break
             client.wait_for_timeout(500)
-        check("link: connected" in client.evaluate(status)
+        check("link: direct" in client.evaluate(status)
               and "(late, adopted)" in client.inner_text("#log"),
               f"{name}: direct channel adopted by the relay once it was idle")
         view.reload()

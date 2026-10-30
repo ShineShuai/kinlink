@@ -208,7 +208,7 @@ with sync_playwright() as p:
               ".then((w) => w.filter((x) => x.type === 'popup').length)")
     sw.evaluate("chrome.storage.local.set({ remote: {} })")
     host.check("#remote")
-    status_has(client, "remote yes")
+    status_has(client, "remote: host allows")
     client.fill("#url", "http://site.test/rb")
     client.click("#ropen")
     box = "#rbox"
@@ -352,7 +352,7 @@ with sync_playwright() as p:
 
     first = pair_and_browse(1)
     check(True, "background host: client 1 paired and browsed with no host tab")
-    status_has(first, "remote yes")  # the offscreen document offers the remote browser too
+    status_has(first, "remote: host allows")  # the offscreen document offers the remote browser too
     first.fill("#url", "http://site.test/rb")
     first.click("#ropen")
     cv1 = first.locator("#rbox canvas")

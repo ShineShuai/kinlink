@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import {
   FrameAssembler, RB_ID, addressUrl, cdpInput, clickCounter, frameChunks, keyInput, mouseInput,
-  size, urlProblem, viewOf, wheelInput,
+  rbWord, size, urlProblem, viewOf, wheelInput,
 } from '../src/remote.js';
 
 for (const u of ['http://127.0.0.1/', 'http://localhost:80/', 'http://10.0.0.1/', 'file:///etc/passwd',
@@ -90,4 +90,10 @@ assert.equal(cc(ev(2100, 50)), 1, 'too far');
 assert.equal(cc(ev(2200, 50, 2)), 1, 'other button');
 const plain = { clientX: 10, clientY: 20, button: 0, detail: 0 };
 assert.equal(mouseInput('down', plain, rect, view, 2).n, 2);
+// status words: the Client's view (peer allows) and the Host's own
+assert.equal(rbWord({ peerServes: true, peerRemote: true }), 'remote: host allows');
+assert.equal(rbWord({ peerServes: true, peerRemote: false }), 'remote: host off');
+assert.equal(rbWord({ peerServes: false, allowed: false }), 'remote: off');
+assert.equal(rbWord({ allowed: true }), 'remote: allowed');
+assert.equal(rbWord({ allowed: true, using: true }), 'remote: in use');
 console.log('remote ok');
