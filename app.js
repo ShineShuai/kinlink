@@ -125,6 +125,14 @@ $('serve').onchange = async (e) => {
   }
 };
 
+// The extension's manifest and service worker are read once: new files need "Reload" in
+// chrome://extensions. Say so when the page and the manifest are different builds.
+const manifestBuild = isExt && chrome.runtime.getManifest?.().version_name;
+if (manifestBuild && manifestBuild !== BUILD) {
+  log(`warning: the extension is build ${manifestBuild} but this page is build ${BUILD}: `
+    + 'click Reload for Kinlink in chrome://extensions, then reload this tab');
+}
+
 // Remote browser, Host side (extension page only): the other side may open a window here (see
 // src/remote-sw.js). Needs the optional permission "debugger" and a service worker to drive it.
 const remoteCap = isExt && !!chrome.storage?.local && !!chrome.runtime.connect;

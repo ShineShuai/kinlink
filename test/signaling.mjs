@@ -48,11 +48,27 @@ assert.equal(await openText(b.sigKey, sealed), 'hello');
 const bad = `${sealed.slice(0, 20)}${sealed[20] === 'A' ? 'B' : 'A'}${sealed.slice(21)}`;
 await assert.rejects(openText(b.sigKey, bad));
 
-const m = new SealedAdapter(new MqttWssAdapter('ws://fake', 'kinlink/room'), a.sigKey);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const inner = new MqttWssAdapter('ws://fake', 'kinlink/room');
+const m = new SealedAdapter(inner, a.sigKey);
 await m.open();
-const got = new Promise((r) => m.addEventListener('message', (e) => r(e.data)));
+const said = [];
+m.addEventListener('message', (e) => said.push(e.data));
+// The fake broker hands our publish back from a "foreign" connection, like a broker cluster does
+// (broker.emqx.io and broker-cn.emqx.io): our own message must not reach us as a peer's.
 await m.send('x'.repeat(3000));
-assert.equal((await got).length, 3000);
+await sleep(30);
+assert.deepEqual(said, [], 'own message came back');
+// A peer's messages: duplicates (one per broker) are delivered once, in order, forged ones never.
+const one = await sealText(a.sigKey, 'y'.repeat(3000));
+const two = await sealText(a.sigKey, 'second');
+for (const t of [one, one, two, one, `${two.slice(0, 20)}!${two.slice(21)}`]) inner.emit(t);
+await sleep(30);
+assert.deepEqual(said.map((t) => t.length), [3000, 6]);
+// the same text sealed again (a retry) is a new message
+inner.emit(await sealText(a.sigKey, 'y'.repeat(3000)));
+await sleep(30);
+assert.equal(said.length, 3);
 await m.close();
 
 // connect timeout

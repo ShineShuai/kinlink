@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Kinlink (dev)",
-  "version": "0.1.0",
+  "version": "0.17.0",
   "description": "Dev build: a paired peer can fetch URLs through this browser.",
   "action": {
     "default_title": "Open Kinlink"
@@ -14,13 +14,14 @@
     "declarativeNetRequestWithHostAccess",
     "webRequest",
     "offscreen",
-    "storage"
+    "storage",
+    "debugger"
   ],
   "optional_host_permissions": [
     "<all_urls>"
   ],
   "optional_permissions": [
-    "debugger",
     "webNavigation"
-  ]
+  ],
+  "version_name": "0017"
 }

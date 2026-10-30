@@ -24,19 +24,22 @@ const until = async (f, ms = 8000) => {
 };
 
 class Lossy extends SignalingAdapter { // one end of a bad medium
-  constructor(rand, loss) { super(); Object.assign(this, { rand, loss, to: [] }); }
-  async send(text) {
-    for (const o of this.to) {
+  constructor(rand, loss, copies = 1) {
+    super();
+    Object.assign(this, { rand, loss, copies, to: [] });
+  }
+  async send(text) { // like an MQTT broker: the publisher gets its own message back too
+    for (const o of [this, ...this.to]) {
       if (this.rand() < this.loss) continue;
-      for (let n = this.rand() < 0.25 ? 2 : 1; n--;) {
+      for (let n = (this.rand() < 0.25 ? 2 : 1) * this.copies; n--;) {
         setTimeout(() => o.emit(text), this.rand() * 15);
       }
     }
   }
 }
-const medium = (seed, loss) => {
+const medium = (seed, loss, copies = 1) => {
   const rand = rng(seed);
-  const [a, b] = [new Lossy(rand, loss), new Lossy(rand, loss)];
+  const [a, b] = [new Lossy(rand, loss, copies), new Lossy(rand, loss, copies)];
   a.to = [b];
   b.to = [a];
   return [a, b];
@@ -72,6 +75,56 @@ for (const bFirst of [false, true]) {
   b.send('back'); // and the other direction
   const back = new Promise((r) => { a.onmessage = (e) => r(e.data); });
   assert.equal(await back, 'back');
+  a.close();
+  b.close();
+}
+
+// Alone on a broker that echoes our own frames back: never "opens" with ourselves (0012 to 0016
+// did, and the Client then took its own hello for the Host's: "peer is not serving").
+{
+  const [ma] = medium(20, 0);
+  const a = mk(ma);
+  a.activate();
+  await sleep(300);
+  assert.equal(a.readyState, 'connecting');
+  assert.equal(a.peerSid, null);
+  a.close();
+}
+
+// The same through a frame that is not our own copy (a cluster re-delivers, sealed once): a frame
+// carrying our session id is ours, whatever its text.
+{
+  const [ma, mb] = medium(22, 0);
+  const logs = [];
+  const a = mk(ma, { onlog: (l) => logs.push(l) });
+  const b = mk(mb);
+  b.sid = a.sid;
+  a.activate();
+  b.activate();
+  await sleep(400);
+  assert.equal(a.readyState, 'connecting');
+  assert.equal(b.readyState, 'connecting');
+  assert.ok(logs.includes('relay: ignoring our own frames echoed by the broker'), logs.join('|'));
+  a.close();
+  b.close();
+}
+
+// Brokers of one cluster, several connections: every frame arrives about 8 times (copies, and our
+// own back). The channel must neither answer every copy nor slow down: open fast, move 100 KB.
+{
+  const [ma, mb] = medium(21, 0, 4);
+  const a = mk(ma);
+  const b = mk(mb);
+  b.onwake = () => b.activate();
+  const t0 = Date.now();
+  a.activate();
+  await until(() => a.readyState === 'open' && b.readyState === 'open', 3000);
+  const got = [];
+  b.onmessage = (e) => got.push(e.data);
+  a.send(bytes(100000, 9));
+  await until(() => got.length === 1, 5000);
+  assert.deepEqual(new Uint8Array(got[0]), bytes(100000, 9));
+  assert.ok(Date.now() - t0 < 5000, `took ${Date.now() - t0} ms`);
   a.close();
   b.close();
 }

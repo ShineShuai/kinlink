@@ -45,10 +45,10 @@ class Broker:
                 n = (body[2] << 8) | body[3]
                 self.topics[ws] = body[4:4 + n]
                 ws.send(b"\x90\x03" + body[:2] + b"\x00")
-            elif kind == 3:  # PUBLISH: forward to the other subscribers of the topic
+            elif kind == 3:  # PUBLISH: to every subscriber of the topic, the publisher included
                 n = (body[0] << 8) | body[1]
                 for other, topic in list(self.topics.items()):
-                    if other is not ws and topic == body[2:2 + n]:
+                    if topic == body[2:2 + n]:
                         other.send(m)
             elif kind == 12:  # PINGREQ
                 ws.send(b"\xd0\x00")

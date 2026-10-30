@@ -135,7 +135,9 @@ export function attach(peer, opts = {}) {
         return fail(new Error(`not connected to a peer yet (link: ${link}); see the log for ice/signaling`));
       }
       if (!remote) return fail(new Error('no hello from peer: old code? reload extension + tabs'));
-      if (!remote.serving) return fail(new Error('peer is not serving: tick "serve requests"'));
+      if (!remote.serving) {
+        return fail(new Error('the host is not serving: set "Serve requests" on the host'));
+      }
       const id = 2 * ++n + (peer.initiator ? 1 : 0); // initiator odd, other side even
       const { body, ...rest } = opts;
       if (body?.byteLength > MAX_BODY) return fail(new Error('request body too large'));

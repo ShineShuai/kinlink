@@ -16,16 +16,20 @@ The Client never contacts the target site.
 3. Client: open the invite link. It connects and offers by itself, nothing to click. The offer is
    re-sent for 60 s, so it does not matter which side is first.
 4. The status line shows `signaling: 2/3 signaling servers | link: connected | peer: build
-   0016, serving yes`. Then either:
+   0017, serving yes`. Then either:
    - "Open rendered": new tab at `.../kinlink/~/<url>`, a real page through the peer
      (hosted web page only; keep the app tab open). Typing `.../kinlink/~/example.com/` works too.
    - "Fetch via peer": script-free preview in this page (also works in the extension page).
 
 Logs: bottom of each app tab ("Log", the "Copy" button copies status and log). The Host's log
 is in the extension page. Extension errors: `chrome://extensions` > Kinlink > Errors.
-After updating files: `chrome://extensions` > reload button on the Kinlink card (re-reads the
-folder), then reload the open Kinlink tabs. Since 0010 the extension asks for two more permissions
-(`webRequest`, `declarativeNetRequestWithHostAccess`); accept them if Chrome asks.
+After updating files: `chrome://extensions` > reload button on the Kinlink card, then reload the
+open Kinlink tabs. This is required: Chrome reads the manifest (permissions) and the service worker
+only at reload, the pages read the files every time. A page that finds another build in the
+manifest says so in its log ("warning: the extension is build ..."). The extension needs
+`webRequest`, `declarativeNetRequestWithHostAccess`, `offscreen`, `storage` and `debugger`
+(remote browser) at install; optional: `webNavigation` and all sites, asked when you enable
+serving or the remote browser.
 
 If it does not connect (the log says where it stops):
 - `signaling failed` / `0/3`: every broker is blocked or down. Open `diag.html?auto`; the broker
@@ -71,8 +75,10 @@ Client sees it as a live picture and controls it with mouse, wheel and keyboard 
 text too). Nothing of that site runs in the Client's origin, only JPEG frames cross, so bot
 checks, YouTube-style apps and heavy JS work as on the Host. It is slower and heavier than the
 rewritten view: it needs a direct link (not the relay), and a window opens on the Host.
-Host setup (extension page): tick "allow the remote browser" (asks for the optional permissions
-`debugger` and `webNavigation`, the second one to catch new tabs of the remote page) and turn on "Allow in Incognito" for Kinlink in `chrome://extensions`. It works with
+Host setup (extension page): reload the extension (it needs the permission `debugger` in the
+manifest: Chrome does not allow it as an optional one), turn on "Allow in Incognito" for Kinlink in
+`chrome://extensions`, then tick "allow the remote browser" (asks for `webNavigation`, which
+catches new tabs of the remote page). It works with
 "in this tab" and "in background". Client: Open in remote browser, status shows `remote yes`.
 Parts: `src/remote-client.js` (viewer), `src/remote-host.js` (DataChannel <-> Port, keeps only the
 newest frame, 2 frames in flight, acked by the viewer), `src/remote-sw.js` (the window, CDP
@@ -92,6 +98,16 @@ cropped; if other windows cover it, Chrome may stop painting; the frame rate dep
 and was not measured. Tested in Chromium with the real extension (click,
 typing, SSRF block, address bar, close, through the background Host); not tested over a real
 network, with real sites, or on macOS and Windows.
+
+## Brokers of one cluster (duplicates and our own messages)
+The public brokers broker.emqx.io and broker-cn.emqx.io appear to be one cluster, and we publish
+to every connected broker: each signaling message and relay frame arrives several times, and our
+own messages come back through the other connection (the per-connection sender id does not match).
+Handled in three places: `SealedAdapter` delivers identical sealed text once and never our own
+copy, one message at a time; `Peer` ignores its own offer text (Chrome would roll back its offer
+and answer it itself); `RelayChannel` drops repeated frame text before decrypting and ignores
+frames with its own session id. Before 0017 the relay on those brokers opened with itself and the
+direct connection could fail. The fake broker in the tests now behaves like that cluster.
 
 ## Same Wi-Fi, same public IP
 Two machines behind one router often get no direct path: the browsers hide local addresses

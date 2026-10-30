@@ -42,8 +42,11 @@ export class Peer {
     };
     this.pc.oniceconnectionstatechange = () => this.onlog(`ice: ${this.pc.iceConnectionState}`);
     this.pc.ondatachannel = (e) => this.wire(e.channel);
-    sig.addEventListener('message', (e) =>
-      this.accept(e.data).catch((err) => this.onlog(`err: ${err.message}`)));
+    this.busy = Promise.resolve(); // one message at a time: setRemoteDescription must not overlap
+    sig.addEventListener('message', (e) => {
+      this.busy = this.busy.then(() => this.accept(e.data))
+        .catch((err) => this.onlog(`err: ${err.message}`));
+    });
   }
 
   // Why is there no connection? Logs candidate counts, pair states and a likely reason.
@@ -105,6 +108,7 @@ export class Peer {
   }
 
   async accept(text) {
+    if (text === this.sent) return; // our own message, handed back by a broker cluster
     const desc = JSON.parse(text);
     if (desc.type === 'offer') {
       if (text === this.offerSeen) { // a retry: our answer may have been lost, send it again

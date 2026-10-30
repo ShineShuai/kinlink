@@ -7,8 +7,9 @@ import { blocked } from './proxy.js';
 // Host -> Client: rbm {url,title,loading} | rbf {n,len,w,h} then binary [u32 RB_ID][<= 16 KiB]
 //   chunks of one JPEG | rbe {message} | rbc {} closed
 // Frame chunks use binary id RB_ID; proxy.js ids are always >= 2.
-// Optional extension permissions the Host grants for the remote browser (one prompt).
-export const PERMS = ['debugger', 'webNavigation'];
+// Optional extension permission the Host grants for the remote browser (with the host access).
+// "debugger" cannot be optional in Chrome: it is in the manifest.
+export const PERMS = ['webNavigation'];
 export const RB_ID = 1;
 export const CHUNK = 16 * 1024 - 4;
 export const MAX_FRAME = 4 << 20;

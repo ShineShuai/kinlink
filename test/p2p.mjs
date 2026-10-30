@@ -76,6 +76,23 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   assert.equal(host.pc.remoteCalls, 1);
 }
 
+// A broker cluster hands our own offer back: it must not be taken for the other side's offer
+// (Chrome would roll our offer back and answer it ourselves).
+{
+  const [cw, hw] = wires();
+  const send = cw.send.bind(cw);
+  cw.send = async (t) => { await send(t); setTimeout(() => cw.emit(t), 0); }; // own copy comes back
+  const hsend = hw.send.bind(hw);
+  hw.send = async (t) => { await hsend(t); setTimeout(() => hw.emit(t), 0); };
+  const client = new Peer(cw);
+  const host = new Peer(hw);
+  await client.offer(5, 10);
+  await sleep(20);
+  assert.equal(client.pc.remoteCalls, 1, 'the client applied only the answer');
+  assert.equal(client.pc.remoteDescription.type, 'answer');
+  assert.equal(host.pc.remoteCalls, 1, 'the host applied only the offer');
+}
+
 // Nobody there: gives up and says so.
 {
   const [cw] = wires();

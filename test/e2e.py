@@ -29,11 +29,15 @@ def pair(browser, client_first, relay=None):
     broker. "then-direct" = ?relay=0 only: starts on the relay, the direct path takes over."""
     ctx = browser.new_context()
     ctx.set_default_timeout(45000)
-    ctx.route_web_socket(re.compile(r"wss://good\.test/.*"), Broker().handle)
+    # good.test and good2.test are one broker cluster (like broker.emqx.io and broker-cn.emqx.io):
+    # a message published on one reaches our own subscription on the other, with another sender id
+    cluster = Broker()
+    ctx.route_web_socket(re.compile(r"wss://good2?\.test/.*"), cluster.handle)
     host, client = ctx.new_page(), ctx.new_page()
     host.add_init_script(EXT_STUB)
     host.route("https://site.test/**", serve_fake_site)
-    query = "?mqtt=wss://dead.test/mqtt,wss://good.test/mqtt"  # dead.test never resolves
+    # dead.test never resolves
+    query = "?mqtt=wss://dead.test/mqtt,wss://good.test/mqtt,wss://good2.test/mqtt"
     query += {"only": "&relay=0&ice=relay", "then-direct": "&relay=0"}.get(relay, "")
     host.goto(f"{base}/index.html{query}")
     secret = host.input_value("#secret")
@@ -42,7 +46,7 @@ def pair(browser, client_first, relay=None):
 
     def start_host():
         host.click("#connect")
-        host.wait_for_function(f"{status}.includes('1/2 signaling')")
+        host.wait_for_function(f"{status}.includes('2/3 signaling')")
 
     if client_first:
         client.goto(link)
@@ -66,7 +70,12 @@ def pair(browser, client_first, relay=None):
         check(on_relay and "dc: open (relay)" in host.inner_text("#log"),
               f"{name}: link started on the broker relay")
     else:
-        check(host.inner_text("#log").count("dc: open") == 1, f"{name}: data channel opened once")
+        # a slow ICE can start the relay (8 s): "dc: open (relay)" is another line, not a 2nd open
+        opened = [l for l in host.inner_text("#log").split("\n") if l.endswith("dc: open")]
+        if len(opened) != 1:
+            print("--- host log\n" + host.inner_text("#log"))
+            print("--- client log\n" + client.inner_text("#log"))
+        check(len(opened) == 1, f"{name}: data channel opened once")
 
     client.fill("#url", "https://site.test/")
     with ctx.expect_page() as popup:

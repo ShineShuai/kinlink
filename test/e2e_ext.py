@@ -311,13 +311,14 @@ with sync_playwright() as p:
     for pg in ctx.pages:  # also the tab the extension opens by itself on install
         pg.close()
     wsb = WsServer(Broker())
-    mq = f"?mqtt=ws://127.0.0.1:{wsb.port}/mqtt"
+    # two connections to one broker = a cluster: our own frames come back on the other connection
+    mq = f"?mqtt=ws://127.0.0.1:{wsb.port}/mqtt,ws://localhost:{wsb.port}/mqtt"
     sw.evaluate("chrome.storage.local.set({ remote: { on: true, unsafeProfile: true } })")
     ui = ctx.new_page()
     ui.goto(f"chrome-extension://{ext_id}/index.html{mq}")
     secret2 = ui.input_value("#secret")
     ui.select_option("#serve", "bg")
-    status_has(ui, "background host", "1/1 signaling")
+    status_has(ui, "background host", "2/2 signaling")
     n_docs = sw.evaluate("chrome.runtime.getContexts({contextTypes: ['OFFSCREEN_DOCUMENT']})"
                          ".then((c) => c.length)")
     check(n_docs == 1, "background host: offscreen document is running")

@@ -6,7 +6,7 @@ import { relayFallback } from './relay.js';
 import { attach } from './proxy.js';
 import { serveRemote } from './remote-host.js';
 
-export const BUILD = '0016';
+export const BUILD = '0017';
 
 // One pairing session: signaling (all brokers), sealed, one Peer, the relay fallback and the
 // request protocol. Used by the app tab and by the background Host (host.js).

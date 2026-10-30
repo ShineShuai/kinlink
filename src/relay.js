@@ -44,6 +44,8 @@ export class RelayChannel extends EventTarget {
   active = false; // false: only listening; a peer's OPEN wakes it (see onwake)
   sid = crypto.getRandomValues(new Uint32Array(1))[0];
   peerSid = null;
+  echoed = 0;
+  seen = new Set(); // recent frame texts (see fresh)
   old = new Set(); // peer session ids replaced by a restart: late duplicates of those are dropped
   onopen = null;
   onclose = null;
@@ -59,7 +61,8 @@ export class RelayChannel extends EventTarget {
 
   constructor(inner, key, o = {}) {
     super();
-    const { tickMs = 500, rtoMs = 1000, openMs = 60000, keepMs = 15000, send } = o;
+    const { tickMs = 500, rtoMs = 1000, openMs = 60000, keepMs = 15000, send, onlog } = o;
+    this.onlog = onlog;
     Object.assign(this, { inner, key, tickMs, rtoMs, openMs, keepMs });
     this.lastSent = 0;
     this.xmit = send ?? ((text) => inner.send(text));
@@ -77,10 +80,21 @@ export class RelayChannel extends EventTarget {
     this.tick();
   }
 
+  // Every frame reaches us several times: once per connected broker, and brokers of one cluster
+  // hand us our own publishes too. Identical text = the same frame: drop it before decrypting.
+  fresh(text) {
+    if (this.seen.has(text)) return false;
+    this.seen.add(text);
+    if (this.seen.size > 2048) this.seen.delete(this.seen.values().next().value);
+    return true;
+  }
+
   async put(bytes) { // best effort: loss is handled by retransmission
     this.lastSent = Date.now();
     try {
-      await this.xmit(await sealBytes(this.key, bytes));
+      const text = await sealBytes(this.key, bytes);
+      this.fresh(text); // our own copy, when it comes back
+      await this.xmit(text);
     } catch { /* no broker up right now */ }
   }
 
@@ -110,9 +124,13 @@ export class RelayChannel extends EventTarget {
   }
 
   async hear(text) {
-    if (this.readyState === 'closed') return;
+    if (this.readyState === 'closed' || !this.fresh(text)) return;
     let f;
     try { f = unpack(await openBytes(this.key, text)); } catch { return; } // foreign or forged
+    if (f.sid === this.sid) { // MQTT brokers deliver a message to its publisher too
+      if (!this.echoed++) this.onlog?.('relay: ignoring our own frames echoed by the broker');
+      return;
+    }
     if (this.old.has(f.sid)) return;
     if (!this.active) { // the peer uses the relay: join it. Frames other than OPEN come from a
       this.onwake?.(); // session that lost us (we restarted): joining sends our OPEN, so it resets
@@ -140,6 +158,7 @@ export class RelayChannel extends EventTarget {
   }
 
   opened() {
+    this.onlog?.(`relay: open with peer ${this.peerSid.toString(16)}`);
     this.readyState = 'open';
     this.dispatchEvent(new Event('open'));
     this.onopen?.();
@@ -247,7 +266,7 @@ export class RelayChannel extends EventTarget {
 // `canWake()` false: this session is over (a restart is pending), do not let the peer join it.
 export function relayFallback(peer, inner, key, opts = {}) {
   const { after = 8000, onlog = () => {}, canWake = () => true, ...rest } = opts;
-  const chan = new RelayChannel(inner, key, rest);
+  const chan = new RelayChannel(inner, key, { ...rest, onlog });
   let timer;
   const go = (why, woken = false) => {
     // Woken by the peer's OPEN: join even if our direct channel is open (the peer can only be

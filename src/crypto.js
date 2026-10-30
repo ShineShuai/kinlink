@@ -47,16 +47,34 @@ export const openText = async (key, s) => td.decode(await openBytes(key, s));
 
 // Wraps any adapter: untrusted medium in, authenticated plaintext out.
 // The SDP carries the DTLS fingerprint, so opening it also pins the peer's cert.
+// Every send is sealed anew (fresh IV), but the one sealed text goes to all brokers, and brokers of
+// one cluster hand it back (also to its sender). Identical sealed text = the same message: it is
+// delivered once. A real retry has a new IV, so it still arrives. Messages come in order, one at
+// a time (the peer must not handle two copies of an answer at once).
 export class SealedAdapter extends SignalingAdapter {
   constructor(inner, key) {
     super();
     this.inner = inner;
     this.key = key;
-    inner.addEventListener('message', async (e) => {
-      try { this.emit(await openText(key, e.data)); } catch { /* forged or foreign: drop */ }
+    this.seen = new Set();
+    this.tail = Promise.resolve();
+    inner.addEventListener('message', (e) => {
+      const s = e.data;
+      if (this.seen.has(s)) return;
+      this.seen.add(s);
+      if (this.seen.size > 256) this.seen.delete(this.seen.values().next().value);
+      const mine = openText(key, s).catch(() => null); // forged or foreign: dropped below
+      this.tail = this.tail.then(async () => {
+        const text = await mine;
+        if (text !== null) this.emit(text);
+      });
     });
   }
   open() { return this.inner.open(); }
-  async send(text) { await this.inner.send(await sealText(this.key, text)); }
+  async send(text) {
+    const s = await sealText(this.key, text);
+    this.seen.add(s); // our own copy, when a broker hands it back
+    await this.inner.send(s);
+  }
   close() { return this.inner.close(); }
 }
