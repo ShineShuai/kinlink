@@ -54,5 +54,52 @@ const T = { checkMs: 5, minMs: 30 };
   await sleep(60);
   assert.ok(stopped);
 }
+// initial: supervised from the start, nothing is opened until it reports a reason; label in logs
+{
+  const first = { why: null, stopped: false, dead: () => first.why, stop: () => { first.stopped = true; } };
+  const made = [];
+  const logs = [];
+  const sup = supervise(async () => {
+    const s = { dead: () => null, stop() {} };
+    made.push(s);
+    return s;
+  }, { ...T, initial: first, label: 'client', onlog: (l) => logs.push(l) });
+  await sleep(60);
+  assert.equal(made.length, 0, 'healthy initial session: nothing opened');
+  first.why = 'no answer';
+  await sleep(80);
+  assert.equal(made.length, 1);
+  assert.ok(first.stopped);
+  assert.ok(logs.some((l) => l === 'client: restart (no answer)'), logs.join('|'));
+  sup.stop();
+}
+
+// sessions that die young: the gap doubles up to maxMs; a long-lived one resets it
+{
+  const times = [];
+  const sup = supervise(async () => {
+    times.push(Date.now());
+    return { dead: () => 'x', stop() {} };
+  }, { checkMs: 5, minMs: 20, maxMs: 80, stableMs: 10000 });
+  await sleep(450);
+  sup.stop();
+  const gaps = times.slice(1).map((t, k) => t - times[k]);
+  assert.ok(gaps.length >= 5, gaps.join(','));
+  const want = [20, 40, 80, 80, 80];
+  want.forEach((w, k) => assert.ok(gaps[k] >= w - 3 && gaps[k] < w + 40, `${gaps.join(',')}`));
+}
+{
+  const times = [];
+  const sup = supervise(async () => {
+    times.push(Date.now());
+    const born = Date.now();
+    const s = { dead: () => (Date.now() - born > 40 ? 'x' : null), stop() {} };
+    return s;
+  }, { checkMs: 5, minMs: 20, maxMs: 200, stableMs: 30 });
+  await sleep(300);
+  sup.stop();
+  const gaps = times.slice(1).map((t, k) => t - times[k]);
+  assert.ok(gaps.every((g) => g < 120), `lived long enough: no growth: ${gaps.join(',')}`);
+}
 clearInterval(keep);
 console.log('supervise ok');

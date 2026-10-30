@@ -8,6 +8,7 @@ import { canRender, renderedUrl, startBridge } from './src/bridge.js';
 import { Jar } from './src/cookies.js';
 import { browser } from './src/browse.js';
 import { execViaPort } from './src/ext-port.js';
+import { supervise } from './src/supervise.js';
 
 const $ = (id) => document.getElementById(id);
 const log = (m) => {
@@ -114,6 +115,7 @@ $('serve').onchange = async (e) => {
       if (r?.error) throw new Error(r.error);
       if (next === 'bg') {
         store('secret', secret);
+        unwatch();
         session?.stop();
         viewer?.close();
         session = peer = api = viewer = undefined;
@@ -191,15 +193,38 @@ async function connect() {
   });
   ({ peer, api } = session);
 }
-act('connect', connect);
+// A lost session (link failed, channel closed, no broker, nobody answered the offers) is opened
+// again, with growing gaps (5 s .. 60 s). The Client offers again; a Host answers the new offer
+// (it restarts for it, see session.js). A click on Connect or Offer takes over.
+let watcher;
+const unwatch = () => { watcher?.stop(); watcher = undefined; };
+const watch = (asClient) => {
+  unwatch();
+  const track = (s) => {
+    const w = { dead: () => (w.noAnswer ? 'no answer' : s.dead()), stop: () => s.stop() };
+    if (asClient) {
+      s.peer.offer().then(() => { w.noAnswer = !s.peer.pc.remoteDescription; })
+        .catch((e) => log(`err: ${e.message}`));
+    }
+    return w;
+  };
+  watcher = supervise(async () => { await connect(); return track(session); }, {
+    initial: track(session), maxMs: 60000, label: asClient ? 'client' : 'host', onlog: log,
+  });
+};
+act('connect', async () => {
+  unwatch();
+  await connect();
+  if ($('serve').value === 'tab') watch(false);
+});
 act('offer', () => {
   if (!peer) throw new Error('Connect first');
-  return peer.offer();
+  watch(true);
 });
 // An invite link (#secret) means: be the Client. Connect and offer, no clicks needed.
 if (!isExt && location.hash.length > 1) {
   log('invite link: joining');
-  connect().then(() => peer.offer()).catch((e) => log(`err: ${e.message}`));
+  connect().then(() => watch(true)).catch((e) => log(`err: ${e.message}`));
 }
 const rendering = canRender();
 $('open').disabled = !rendering;

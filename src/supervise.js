@@ -1,27 +1,33 @@
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// Keeps one session alive for an unattended Host. open() -> { dead(): string | null, stop() }.
-// Reopens when the session reports a reason (link or channel gone, no broker, new client offers)
-// and retries when opening failed, never more often than every minMs.
-export function supervise(open, { checkMs = 3000, minMs = 5000, onlog = () => {} } = {}) {
-  let cur;
+// Keeps one session alive. open() -> { dead(): string | null, stop() }.
+// Reopens when the session reports a reason (link or channel gone, no broker, new client offers,
+// nobody answered) and retries when opening failed. Never more often than every minMs; when
+// sessions keep dying young (< stableMs), the gap doubles up to maxMs (default: no growth).
+// initial: a session that is already open (supervised from now on, none is opened at first).
+export function supervise(open, opts = {}) {
+  const { checkMs = 3000, minMs = 5000, maxMs = minMs, stableMs = 30000, initial,
+    label = 'host', onlog = () => {} } = opts;
+  let cur = initial;
   let busy = false;
   let quit = false;
-  let last = 0;
+  let last = initial ? Date.now() : 0; // when the current session was opened
+  let fails = 0;
   const reopen = async (why) => {
     if (busy || quit) return;
     busy = true;
     try {
       cur?.stop();
       cur = undefined;
-      const wait = last + minMs - Date.now();
+      fails = Date.now() - last < stableMs ? fails + 1 : 0;
+      const wait = last + Math.min(maxMs, minMs * 2 ** Math.max(0, fails - 1)) - Date.now();
       if (wait > 0) await sleep(wait);
       last = Date.now();
-      onlog(why ? `host: restart (${why})` : 'host: start');
+      onlog(why ? `${label}: restart (${why})` : `${label}: start`);
       cur = await open();
       if (quit) cur.stop();
     } catch (e) {
-      onlog(`host: open failed: ${e.message}`);
+      onlog(`${label}: open failed: ${e.message}`);
     } finally {
       busy = false;
     }
@@ -31,6 +37,6 @@ export function supervise(open, { checkMs = 3000, minMs = 5000, onlog = () => {}
     if (why) reopen(why);
   }, checkMs);
   timer.unref?.();
-  reopen();
+  if (!initial) reopen();
   return { stop() { quit = true; clearInterval(timer); cur?.stop(); } };
 }

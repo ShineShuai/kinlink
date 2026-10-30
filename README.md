@@ -16,7 +16,7 @@ The Client never contacts the target site.
 3. Client: open the invite link. It connects and offers by itself, nothing to click. The offer is
    re-sent for 60 s, so it does not matter which side is first.
 4. The status line shows `signaling: 2/3 signaling servers | link: direct (srflx/srflx udp) |
-   peer: build 0019, serving yes | remote: host off`. `link` is `direct`, `relay` or the ICE
+   peer: build 0020, serving yes | remote: host off`. `link` is `direct`, `relay` or the ICE
    state; `remote` is `host allows`/`host off` (Client) or `off`/`allowed`/`in use` (Host). Then either:
    - "Open rendered": new tab at `.../kinlink/~/<url>`, a real page through the peer
      (hosted web page only; keep the app tab open). Typing `.../kinlink/~/example.com/` works too.
@@ -45,6 +45,11 @@ If it does not connect (the log says where it stops):
 - `stun: 3/5 answered: ..` in the log: only STUN servers that answer here go to WebRTC (one that
   never answers, e.g. google in China, left the gathering without a server-reflexive candidate).
   `diag.html` picks its server the same way.
+- `client: restart (channel closed | link failed | no answer | no signaling server)`: the Client
+  (and a Host started with Connect in "this tab") reopens a lost session by itself: Client
+  offers again, the Host restarts for the new offer. Gaps grow 5, 10, 20, 40, 60 s while sessions
+  die young (`src/supervise.js`). Connect or Offer takes over; the background Host always did
+  this. An open remote browser or a running download ends with the old session.
 - Link `direct` or `relay` but `no hello`: one side runs old code. Reload the extension and all tabs.
 
 Signaling is always MQTT (all brokers at once, nothing to choose). `?signaling=bc` is a dev-only

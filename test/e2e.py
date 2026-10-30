@@ -23,7 +23,7 @@ def serve_fake_site(route):
                   headers={"access-control-allow-origin": "*"})  # the real Host has host_permissions
 
 
-def pair(browser, client_first, relay=None):
+def pair(browser, client_first, relay=None, reconnect=False):
     """Host page (extension stubbed) and Client page (invite link) over a fake broker.
     relay: "only" = ?relay=0&ice=relay on both pages, no direct path: frames travel over the
     broker. "then-direct" = ?relay=0 only: starts on the relay, the direct path takes over."""
@@ -96,6 +96,26 @@ def pair(browser, client_first, relay=None):
         view.reload()
         view.wait_for_selector("#p")
         check(True, f"{name}: page still loads over the adopted direct channel")
+    if reconnect:
+        # The Host restarts (Connect again): its peer connection closes. The Client has to notice,
+        # open a new session and offer again by itself; the rendered tab then works again.
+        start_host()
+        client.wait_for_function(
+            "document.getElementById('log').textContent.includes('client: restart')", timeout=40000)
+        for _ in range(40):
+            view.reload()
+            try:
+                view.wait_for_selector("#p", timeout=1500)
+                break
+            except Exception:
+                client.wait_for_timeout(1000)
+        ok = 'id="p"' in view.content()
+        if not ok:
+            print("--- client log\n" + client.inner_text("#log"))
+            print("--- host log\n" + host.inner_text("#log"))
+        check(ok, f"{name}: client reconnected by itself after the host restarted")
+        client.wait_for_function(f"{status}.includes('link: direct')")
+        check(True, f"{name}: and it is a direct link again")
     ctx.close()
 
 
@@ -171,6 +191,7 @@ with sync_playwright() as p:
     pair(browser, client_first=False, relay="only")
     pair(browser, client_first=True, relay="only")
     pair(browser, client_first=False, relay="then-direct")
+    pair(browser, client_first=False, reconnect=True)
     browser.close()
 srv.shutdown()
 shutil.rmtree(tmp)

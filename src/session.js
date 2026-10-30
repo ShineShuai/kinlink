@@ -7,7 +7,7 @@ import { attach } from './proxy.js';
 import { serveRemote } from './remote-host.js';
 import { pickStun } from './diag.js';
 
-export const BUILD = '0019';
+export const BUILD = '0020';
 
 // One pairing session: signaling (all brokers), sealed, one Peer, the relay fallback and the
 // request protocol. Used by the app tab and by the background Host (host.js).
