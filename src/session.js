@@ -4,13 +4,14 @@ import { SealedAdapter, derive } from './crypto.js';
 import { Peer } from './p2p.js';
 import { relayFallback } from './relay.js';
 import { attach } from './proxy.js';
+import { serveRemote } from './remote-host.js';
 
-export const BUILD = '0015';
+export const BUILD = '0016';
 
 // One pairing session: signaling (all brokers), sealed, one Peer, the relay fallback and the
 // request protocol. Used by the app tab and by the background Host (host.js).
 // o: { secret, brokers, stun, rtc (RTCConfiguration extras), signaling ('mqtt' | 'bc'), relayAfter,
-//      enabled, exec, onlog,
+//      enabled, exec, remote ({ enabled(), connect() }: the remote browser, Host only), onlog,
 //      onhello, onstate({ sig, link, peer }) }
 // Returns { peer, api, stop, dead() }; dead() says why an unattended Host should start over.
 export async function openSession(o) {
@@ -61,9 +62,12 @@ export async function openSession(o) {
   for (const ev of ['open', 'close', 'switch']) relay.chan.addEventListener(ev, link);
   const api = attach(peer, {
     enabled: o.enabled, onlog, build: BUILD, onhello: o.onhello, exec: o.exec,
+    hello: () => ({ remote: !!o.remote?.enabled() }),
   });
+  const rb = o.remote && serveRemote(peer, { ...o.remote, onlog }); // Host: remote browser
   onstate({ link: 'new', peer: 'peer: not connected' });
   const stop = () => {
+    rb?.stop();
     relay.stop();
     sig.close().catch(() => {});
     peer.pc.close();

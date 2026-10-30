@@ -1,12 +1,15 @@
 import { exec } from './src/host-ext.js';
 import { servePort } from './src/ext-port.js';
+import { servePortRemote } from './src/remote-sw.js';
 
 const open = () => chrome.tabs.create({ url: 'index.html' });
 chrome.action.onClicked.addListener(open);
 
 // One-hop executor for the app tab and the background Host (needs APIs only the worker has).
 chrome.runtime.onConnect.addListener((port) => {
-  if (port.name === 'exec' && port.sender?.id === chrome.runtime.id) servePort(port, exec);
+  if (port.sender?.id !== chrome.runtime.id) return;
+  if (port.name === 'exec') servePort(port, exec);
+  else if (port.name === 'rb') servePortRemote(port); // remote browser (src/remote-sw.js)
 });
 
 // Background Host: an offscreen document (WebRTC, no tab) runs host.js. Config lives in
@@ -32,7 +35,9 @@ chrome.runtime.onMessage.addListener((m, sender, reply) => {
     return true;
   }
   if (m?.kl === 'ready') {
-    chrome.storage.local.get('bg').then(({ bg }) => reply(bg ?? { on: false }));
+    chrome.storage.local.get(['bg', 'remote']).then(({ bg, remote }) => {
+      reply({ ...(bg ?? { on: false }), remote: !!remote?.on });
+    });
     return true;
   }
   return false;

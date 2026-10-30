@@ -50,7 +50,7 @@ export function attach(peer, opts = {}) {
   const say = (op, m) => peer.dc.send(`${op}:${JSON.stringify(m)}`);
   // Handshake: lets each side fail fast when the other runs old code or is not serving.
   const hello = (reply = false) => peer.dc?.readyState === 'open'
-    && say('hello', { build, serving: enabled(), reply });
+    && say('hello', { build, serving: enabled(), reply, ...opts.hello?.() });
   // A hello sent while the other side's channel is still opening can get lost: repeat it until
   // the other side's hello arrives. Replies (reply: true) are not answered again.
   peer.onopen = () => {
@@ -127,6 +127,7 @@ export function attach(peer, opts = {}) {
 
   return {
     hello,
+    info: () => remote, // the peer's last hello: { build, serving, remote? }
     // opts: { method, body (ArrayBuffer), cookie, referer, origin }
     fetch: (url, headers, opts = {}) => new Promise((ok, fail) => {
       if (peer.dc?.readyState !== 'open') {

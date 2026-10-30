@@ -36,6 +36,27 @@ class Site(http.server.BaseHTTPRequestHandler):
                 self.reply(200, b"<!doctype html><title>welcome</title><p id=w>welcome</p>")
             else:
                 self.reply(302, headers=[("Location", "/consent")])
+        elif self.path == "/rb":  # a page that needs real JavaScript (remote browser)
+            port = self.server.server_port
+            self.reply(200, (
+                "<!doctype html><title>rb-off</title><body style='margin:0;background:#fff'>"
+                "<button id=b style='position:absolute;left:100px;top:100px;"
+                "width:200px;height:60px'>click me</button>"
+                "<input id=i style='position:absolute;left:100px;top:200px;"
+                "width:300px;height:40px'><script>document.title='rb-on';"
+                "b.onclick=()=>fetch('/clicked');"
+                "i.oninput=()=>fetch('/typed?v='+encodeURIComponent(i.value));"
+                f"new Image().src='http://127.0.0.1:{port}/leak';</script>").encode())
+        elif self.path == "/pop":  # a link that wants a new window
+            self.reply(200, b"<!doctype html><title>pop</title><a id=a target=_blank href=/consent"
+                            b" style='position:absolute;left:50px;top:50px;font-size:40px'>"
+                            b"new window</a>")
+        elif self.path == "/esc":  # a page that sends the tab to a private address
+            port = self.server.server_port
+            self.reply(200, (f"<!doctype html><title>esc</title><script>"
+                             f"location.href='http://127.0.0.1:{port}/esc-leak'</script>").encode())
+        elif self.path in ("/clicked", "/leak", "/esc-leak") or self.path.startswith("/typed"):
+            self.reply(204)
         elif self.path == "/consent":
             self.reply(200, b"<!doctype html><title>consent</title><form method=post action=/consent>"
                             b"<input type=hidden name=x value=1><button id=agree>agree</button></form>")
@@ -87,6 +108,7 @@ shutil.copytree(ROOT, ext, ignore=shutil.ignore_patterns(".git", "node_modules",
 manifest = json.loads((ext / "manifest.json").read_text())
 manifest["host_permissions"] = ["<all_urls>"]  # the test cannot click the permission prompt
 manifest.pop("optional_host_permissions", None)
+manifest["permissions"] += manifest.pop("optional_permissions", [])  # the debugger prompt, same
 (ext / "manifest.json").write_text(json.dumps(manifest))
 
 with sync_playwright() as p:
@@ -178,6 +200,111 @@ with sync_playwright() as p:
           "host logged the upgrade as a 307 redirect")
     v.close()
 
+    # Remote browser: the Host's real Chrome loads a page that needs JavaScript; the Client sees
+    # frames and sends clicks and keys. (unsafeProfile: the test browser cannot be set to "allow in
+    # incognito"; the default refuses to run outside incognito, which is checked first.)
+    DRAWN = "c => c.width > 0 && c.getContext('2d').getImageData(1, 1, 1, 1).data[3] === 255"
+    POPUPS = ("chrome.windows.getAll()"
+              ".then((w) => w.filter((x) => x.type === 'popup').length)")
+    sw.evaluate("chrome.storage.local.set({ remote: {} })")
+    host.check("#remote")
+    status_has(client, "remote yes")
+    client.fill("#url", "http://site.test/rb")
+    client.click("#ropen")
+    box = "#rbox"
+    for _ in range(50):
+        if "Incognito" in client.inner_text(box):
+            break
+        client.wait_for_timeout(200)
+    check("Incognito" in client.inner_text(box), "remote browser refuses to run outside incognito")
+    sw.evaluate("chrome.storage.local.set({ remote: { on: true, unsafeProfile: true } })")
+    client.click("#ropen")
+    client.set_viewport_size({"width": 1280, "height": 1300})  # the whole canvas on screen
+    cv = client.locator(f"{box} canvas")
+    for _ in range(100):
+        if cv.evaluate(DRAWN):
+            break
+        client.wait_for_timeout(200)
+    else:
+        raise AssertionError("no frame arrived\n" + client.inner_text("#log")
+                             + host.inner_text("#log"))
+    check(client.title() == "Kinlink: rb-on", f"page JavaScript ran on the host: {client.title()}")
+
+    def at(x, y):  # remote viewport px -> page px
+        b = cv.bounding_box()
+        k = b["width"] / cv.evaluate("c => c.width")
+        return b["x"] + x * k, b["y"] + y * k
+
+    client.mouse.click(*at(150, 130))
+    client.mouse.click(*at(150, 220))
+    client.keyboard.type("hey")
+    for _ in range(50):
+        if any(p == "/typed?v=hey" for _, p, *_ in LOG):
+            break
+        client.wait_for_timeout(200)
+    paths = [p for _, p, *_ in LOG]
+    if "/clicked" not in paths or "/typed?v=hey" not in paths:
+        print("site saw:", [p for _, p, *_ in LOG][-8:])
+        print("host log:\n" + host.inner_text("#log"))
+        print("client log:\n" + client.inner_text("#log"))
+        print("viewer:", client.inner_text(f"{box} span"), cv.bounding_box(),
+              cv.evaluate("c => [c.width, c.height]"))
+    check("/clicked" in paths, "click reached the remote page")
+    check("/typed?v=hey" in paths, "typing reached the remote page")
+    check("/leak" not in paths, "the tab could not reach 127.0.0.1 (blocked)")
+    client.fill(f"{box} input", f"http://127.0.0.1:{site.server_port}/secret")
+    client.press(f"{box} input", "Enter")
+    for _ in range(50):
+        if "blocked" in client.inner_text(f"{box} span"):
+            break
+        client.wait_for_timeout(100)
+    check("blocked" in client.inner_text(f"{box} span"), "address bar refuses private addresses")
+    client.fill(f"{box} input", "http://site.test/consent")
+    client.press(f"{box} input", "Enter")
+    for _ in range(50):
+        if client.title() == "Kinlink: consent":
+            break
+        client.wait_for_timeout(200)
+    check(client.title() == "Kinlink: consent", f"address bar navigates: {client.title()}")
+    # a target=_blank link opens in the Host's normal window: that tab must be closed and the
+    # remote tab navigates instead
+    client.fill(f"{box} input", "http://site.test/pop")
+    client.press(f"{box} input", "Enter")
+    for _ in range(50):
+        if client.title() == "Kinlink: pop":
+            break
+        client.wait_for_timeout(200)
+    check(client.title() == "Kinlink: pop", f"address bar navigates again: {client.title()}")
+    client.mouse.click(*at(80, 70))
+    for _ in range(50):
+        if client.title() == "Kinlink: consent":
+            break
+        client.wait_for_timeout(200)
+    count = ("chrome.tabs.query({})"
+             ".then((t) => t.filter((x) => (x.url || '').startsWith('http://site.test')).length)")
+    for _ in range(25):  # the extra tab is closed a moment after it opened
+        tabs = sw.evaluate(count)
+        if tabs == 1:
+            break
+        client.wait_for_timeout(200)
+    check(client.title() == "Kinlink: consent" and tabs == 1,
+          f"target=_blank: the same remote tab navigates, the new tab is closed ({tabs})")
+    # a page sending the tab to 127.0.0.1: blocked at the network level
+    client.fill(f"{box} input", "http://site.test/esc")
+    client.press(f"{box} input", "Enter")
+    client.wait_for_timeout(2500)
+    check("/esc-leak" not in [p for _, p, *_ in LOG], "script navigation to 127.0.0.1 is blocked")
+    client.click(f"{box} button:has-text('Close')")
+    for _ in range(50):
+        if sw.evaluate(POPUPS) == 0:
+            break
+        client.wait_for_timeout(200)
+    n = sw.evaluate(POPUPS)
+    check(n == 0, "closing the viewer closes the host's window")
+    host.uncheck("#remote")
+    status_has(client, "serving yes")
+    sw.evaluate("chrome.storage.local.set({ remote: {} })")
+
     # Background host: the offscreen document serves while no Kinlink tab is open, and takes a
     # new client after the first one left. Needs a real WebSocket broker (offscreen documents are
     # not covered by route_web_socket).
@@ -185,6 +312,7 @@ with sync_playwright() as p:
         pg.close()
     wsb = WsServer(Broker())
     mq = f"?mqtt=ws://127.0.0.1:{wsb.port}/mqtt"
+    sw.evaluate("chrome.storage.local.set({ remote: { on: true, unsafeProfile: true } })")
     ui = ctx.new_page()
     ui.goto(f"chrome-extension://{ext_id}/index.html{mq}")
     secret2 = ui.input_value("#secret")
@@ -218,6 +346,16 @@ with sync_playwright() as p:
 
     first = pair_and_browse(1)
     check(True, "background host: client 1 paired and browsed with no host tab")
+    status_has(first, "remote yes")  # the offscreen document offers the remote browser too
+    first.fill("#url", "http://site.test/rb")
+    first.click("#ropen")
+    cv1 = first.locator("#rbox canvas")
+    for _ in range(100):
+        if first.title() == "Kinlink: rb-on":
+            break
+        first.wait_for_timeout(200)
+    check(first.title() == "Kinlink: rb-on" and cv1.evaluate("c => c.width > 0"),
+          "background host: remote browser works from the offscreen document")
     first.close()
     second = pair_and_browse(2)
     check(True, "background host: client 2 paired after client 1 left (session restarted)")

@@ -1,6 +1,8 @@
 import { newSecret } from './src/crypto.js';
 import { Peer } from './src/p2p.js';
 import { BUILD, openSession } from './src/session.js';
+import { mountRemote } from './src/remote-client.js';
+import { PERMS as RB_PERMS } from './src/remote.js';
 import { CFG } from './src/diag.js';
 import { canRender, renderedUrl, startBridge } from './src/bridge.js';
 import { Jar } from './src/cookies.js';
@@ -29,7 +31,7 @@ const CSP = '<meta http-equiv="Content-Security-Policy" '
   + 'content="default-src \'none\'; style-src \'unsafe-inline\'; img-src data:">';
 const ORIGINS = { origins: ['<all_urls>'] };
 const PAGES_URL = 'https://shineshuai.github.io/kinlink/'; // hosted Client page
-let session, peer, api;
+let session, peer, api, viewer;
 const jar = new Jar(); // cookies of the sites we browse, kept in this tab only
 const browse = () => api && browser(api, jar);
 // The extension host does single hops with Cookie/Referer/Origin (in its service worker, see
@@ -40,7 +42,8 @@ const paint = () => {
   $('status').textContent = `${state.sig} | link: ${state.link} | ${state.peer}`;
 };
 const showPeer = (m) => {
-  state.peer = `peer: build ${m.build}, serving ${m.serving ? 'yes' : 'no'}`;
+  const rb = m.remote ? ', remote yes' : '';
+  state.peer = `peer: build ${m.build}, serving ${m.serving ? 'yes' : 'no'}${rb}`;
   paint();
 };
 // ?mqtt=wss://a,wss://b overrides the broker list (tests, own broker).
@@ -108,7 +111,8 @@ $('serve').onchange = async (e) => {
       if (next === 'bg') {
         store('secret', secret);
         session?.stop();
-        session = peer = api = undefined;
+        viewer?.close();
+        session = peer = api = viewer = undefined;
         $('log').textContent = '';
       }
     }
@@ -121,12 +125,40 @@ $('serve').onchange = async (e) => {
   }
 };
 
+// Remote browser, Host side (extension page only): the other side may open a window here (see
+// src/remote-sw.js). Needs the optional permission "debugger" and a service worker to drive it.
+const remoteCap = isExt && !!chrome.storage?.local && !!chrome.runtime.connect;
+$('remote').disabled = !remoteCap;
+if (remoteCap) {
+  chrome.storage.local.get('remote').then(({ remote }) => { $('remote').checked = !!remote?.on; });
+}
+$('remote').onchange = async (e) => {
+  const on = e.target.checked;
+  try {
+    if (on && !(await chrome.permissions.request({ permissions: RB_PERMS, ...ORIGINS }))) {
+      throw new Error('permission denied');
+    }
+    const { remote } = await chrome.storage.local.get('remote');
+    await chrome.storage.local.set({ remote: { ...remote, on } });
+    if (mode === 'bg') { // the background host reads the flag when it starts: restart it
+      const secret = $('secret').value.trim();
+      const q = new URLSearchParams(location.search).get('mqtt')?.split(',');
+      await chrome.runtime.sendMessage({ kl: 'bg', on: true, secret, brokers: q });
+    }
+    api?.hello();
+  } catch (err) {
+    e.target.checked = !on;
+    log(`err: ${err.message}`);
+  }
+};
+
 async function connect() {
   if (!Peer.prototype.tx) throw new Error('src/p2p.js is outdated: apply all patches in order');
   const secret = $('secret').value.trim();
   store('secret', secret);
+  viewer?.close();
   session?.stop();
-  session = peer = api = undefined;
+  session = peer = api = viewer = undefined;
   session = await openSession({
     secret,
     brokers: brokers(),
@@ -135,6 +167,9 @@ async function connect() {
     relayAfter,
     rtc,
     enabled: () => $('serve').value === 'tab',
+    remote: remoteCap ? {
+      enabled: () => $('remote').checked, connect: () => chrome.runtime.connect({ name: 'rb' }),
+    } : undefined,
     exec: hostExec ? execViaPort : undefined,
     onlog: log,
     onhello: showPeer,
@@ -172,6 +207,22 @@ act('invite', async () => {
   if (signaling !== 'mqtt') log('note: invite links only work with mqtt signaling');
   await navigator.clipboard.writeText(`${base}#${$('secret').value.trim()}`);
   log(`invite link copied: ${base}#...`);
+});
+
+// Remote browser, Client side: the Host's real browser loads the page, we see and control it.
+const remoteWhy = () => {
+  const info = api?.info();
+  if (!info) return 'no hello from the peer yet';
+  if (!info.remote) return 'the host has not allowed the remote browser (tick it on the host)';
+  if (peer.dc?.relay && !peer.dc.useAlt) {
+    return 'the remote browser needs a direct link, not the relay';
+  }
+  return null;
+};
+act('ropen', async () => {
+  if (!peer) throw new Error('Connect first');
+  viewer ??= mountRemote($('rbox'), peer, { can: remoteWhy, onlog: log });
+  viewer.open($('url').value.trim());
 });
 
 act('go', async () => {

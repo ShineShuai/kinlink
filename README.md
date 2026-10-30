@@ -16,7 +16,7 @@ The Client never contacts the target site.
 3. Client: open the invite link. It connects and offers by itself, nothing to click. The offer is
    re-sent for 60 s, so it does not matter which side is first.
 4. The status line shows `signaling: 2/3 signaling servers | link: connected | peer: build
-   0015, serving yes`. Then either:
+   0016, serving yes`. Then either:
    - "Open rendered": new tab at `.../kinlink/~/<url>`, a real page through the peer
      (hosted web page only; keep the app tab open). Typing `.../kinlink/~/example.com/` works too.
    - "Fetch via peer": script-free preview in this page (also works in the extension page).
@@ -64,6 +64,34 @@ app tab, when it is the Host, uses it too. Extension permissions since 0013: `of
 `storage` (the secret is kept in `chrome.storage.local`, unencrypted, like the one in
 localStorage before). Open the `?mqtt=wss://..` override in the app tab to give the background
 Host other brokers.
+
+## Remote browser (opt-in, for sites that need real JavaScript)
+"Open in remote browser" (Client): the Host's own Chrome loads the page in a popup window and the
+Client sees it as a live picture and controls it with mouse, wheel and keyboard (paste and IME
+text too). Nothing of that site runs in the Client's origin, only JPEG frames cross, so bot
+checks, YouTube-style apps and heavy JS work as on the Host. It is slower and heavier than the
+rewritten view: it needs a direct link (not the relay), and a window opens on the Host.
+Host setup (extension page): tick "allow the remote browser" (asks for the optional permissions
+`debugger` and `webNavigation`, the second one to catch new tabs of the remote page) and turn on "Allow in Incognito" for Kinlink in `chrome://extensions`. It works with
+"in this tab" and "in background". Client: Open in remote browser, status shows `remote yes`.
+Parts: `src/remote-client.js` (viewer), `src/remote-host.js` (DataChannel <-> Port, keeps only the
+newest frame, 2 frames in flight, acked by the viewer), `src/remote-sw.js` (the window, CDP
+screencast and input), `src/remote.js` (protocol, input validation, URL policy).
+Safety: the window is **incognito**, so the Client never sees the Host's logins (without "Allow in
+Incognito" it refuses; `chrome.storage.local` `remote.unsafeProfile` is a test-only escape). Only
+http(s) pages; the same SSRF check as the fetch executor for typed URLs, plus six
+declarativeNetRequest rules that block every request of that tab to private, loopback and
+link-local addresses (also for navigations and redirects of the tab); a tab that still ends on a
+disallowed URL is sent to about:blank; downloads are denied (CDP, not tested); new tabs and
+popups (they open in the Host's normal window, outside the block rules) are closed at once and the
+same tab navigates instead; one remote browser at a time. Chrome shows its "is being debugged" banner in that window, so the Host
+user sees it. Known gaps: names that resolve to private IPs (as for fetch); camera, microphone
+and location prompts of the page appear on the Host; copy to the Client clipboard, file upload
+and drag and drop are missing; if the Host's screen is smaller than the viewport the picture is
+cropped; if other windows cover it, Chrome may stop painting; the frame rate depends on the link
+and was not measured. Tested in Chromium with the real extension (click,
+typing, SSRF block, address bar, close, through the background Host); not tested over a real
+network, with real sites, or on macOS and Windows.
 
 ## Same Wi-Fi, same public IP
 Two machines behind one router often get no direct path: the browsers hide local addresses
@@ -125,6 +153,7 @@ Local: `npm test`, `bash scripts/build-site.sh`,
 - `src/p2p.js`: WebRTC peer. `src/relay.js`: broker relay channel and fallback trigger.
   `src/crypto.js`: HKDF, AES-GCM, SealedAdapter.
 - `src/signaling.js`, `src/mqtt.js`: signaling adapters; `FanoutAdapter` uses all brokers at once. `src/diag.js`: probes and endpoint list.
+- `src/remote*.js`: remote browser (see above).
 - `manifest.json`, `background.js`: extension shell (opens `index.html`), executor port, offscreen
   control. `host.html`, `host.js`: background Host. `src/session.js`: one pairing session (used by
   `app.js` and `host.js`). `src/supervise.js`, `src/ext-port.js`: see above.

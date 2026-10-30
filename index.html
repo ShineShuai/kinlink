@@ -19,6 +19,9 @@
 <div>Serve requests (extension page only): <select id=serve>
   <option value=off>off</option><option value=tab>in this tab</option>
   <option value=bg>in background</option></select></div>
+<div><label><input type=checkbox id=remote> allow the remote browser: the other side can open a
+  window on this machine and see and control it (extension page only; first turn on "Allow in
+  Incognito" for Kinlink in chrome://extensions)</label></div>
 <p>"in background": no Connect needed, this tab can be closed, the extension keeps serving
   (this tab then only shows status and log). "in this tab": click Connect and keep this tab open.
   "off": this browser only browses.</p>
@@ -30,6 +33,9 @@
   "Open rendered" opens a new tab (web page only, keep this tab open). "Fetch via peer" shows
   a script-free preview below.</p>
 <input id=url size=48 value="https://example.com/"><button id=open>Open rendered</button><button id=go>Fetch via peer</button>
+<button id=ropen title="for sites that need real JavaScript; the other side must allow it">
+  Open in remote browser</button>
+<div id=rbox></div>
 <div id=meta></div>
 <div id=view></div>
 

@@ -32,6 +32,7 @@ if (cfg?.on) {
     relayAfter: 8000,
     enabled: () => true,
     exec: execViaPort,
+    remote: { enabled: () => !!cfg.remote, connect: () => chrome.runtime.connect({ name: 'rb' }) },
     onlog: log,
     onstate,
     onhello: (m) => onstate({
