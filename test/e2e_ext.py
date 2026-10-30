@@ -10,6 +10,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from support import ROOT, Broker, WsServer, build_site, check
 
 LOG = []  # what the fake site saw: (method, path, cookie, origin, referer, body)
+COND = []  # If-None-Match of every request for /etag
 
 
 class Site(http.server.BaseHTTPRequestHandler):
@@ -36,6 +37,16 @@ class Site(http.server.BaseHTTPRequestHandler):
                 self.reply(200, b"<!doctype html><title>welcome</title><p id=w>welcome</p>")
             else:
                 self.reply(302, headers=[("Location", "/consent")])
+        elif self.path == "/fresh":  # the Client's HTTP cache must not ask again
+            self.reply(200, b"<!doctype html><title>fresh</title><p id=f>fresh</p>",
+                       [("Cache-Control", "max-age=300")])
+        elif self.path == "/etag":  # stale at once, but revalidated with a 304
+            COND.append(self.headers.get("If-None-Match"))
+            tags = [("ETag", '"e1"'), ("Cache-Control", "max-age=0")]
+            if self.headers.get("If-None-Match") == '"e1"':
+                self.reply(304, headers=tags)
+            else:
+                self.reply(200, b"<!doctype html><title>etag</title><p id=e>etag</p>", tags)
         elif self.path == "/rb":  # a page that needs real JavaScript (remote browser)
             port = self.server.server_port
             self.reply(200, (
@@ -199,6 +210,20 @@ with sync_playwright() as p:
     check("307 http://hsts.test/ -> https://hsts.test/" in host.inner_text("#log"),
           "host logged the upgrade as a 307 redirect")
     v.close()
+
+    # HTTP cache of the Client: a fresh page is not requested again, a stale one is revalidated
+    # (If-None-Match through the real extension, 304 answered with the stored body)
+    for path, sel in (("/fresh", "#f"), ("/etag", "#e")):
+        for _ in range(2):
+            v = ctx.new_page()
+            v.goto(f"{R}http://site.test{path}")
+            v.wait_for_selector(sel)
+            v.close()
+    check(sum(1 for e in LOG if e[1] == "/fresh") == 1, "fresh page: fetched once, then cached")
+    check(COND == [None, '"e1"'], f"stale page: revalidated with If-None-Match: {COND}")
+    check("304 http://site.test/etag" in host.inner_text("#log"), "host logged the 304")
+    check("http://site.test/fresh" in client.inner_text("#log")
+          and "(cached)" in client.inner_text("#log"), "client logged the cache hit")
 
     # Remote browser: the Host's real Chrome loads a page that needs JavaScript; the Client sees
     # frames and sends clicks and keys. (unsafeProfile: the test browser cannot be set to "allow in

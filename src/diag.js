@@ -57,7 +57,7 @@ export async function pickStun(urls, ms = 1500, max = 3) {
       });
     }
   });
-  return { up: up.length ? up : urls.slice(0, 2), rows, answered: up.length };
+  return { up: up.length ? up : urls.slice(0, 2), rows, answered: up.length, total: urls.length };
 }
 
 const wsProbe = (url, proto, ms) => new Promise((res, rej) => {

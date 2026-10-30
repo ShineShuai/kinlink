@@ -1,6 +1,7 @@
 // Wire format on the DataChannel (ordered, reliable), both directions:
 //   text "req:{id,url,method,headers,cookie,referer,origin,body(base64)}"  fetch ONE hop (GET/POST)
-//   text "res:{id,status,url,headers,cookies,location}"  response head; redirects are not followed
+//   text "res:{id,status,url,headers,cookies,location,enc}"  response head; redirects are not
+//        followed; enc "gzip": the body frames are gzip of the body (asked for by req.ae)
 //   bin  [u32 id][<= 16 KiB body bytes]          response body frames
 //   text "fin:{id}" | "err:{id,message}"         end of response | failure
 const CHUNK = 16 * 1024 - 4;
@@ -9,7 +10,35 @@ const IDLE = 30000; // a request fails after this long without a byte from the p
 const IDLE_RELAY = 90000; // ... longer on the broker relay (slow, bursty)
 const LIMIT = 10 * 60000; // ... and after this long in any case
 const MAX_BODY = 150 * 1024; // a request is one DataChannel message (limit 256 KiB with base64)
-const ALLOW = new Set(['accept', 'accept-language', 'range', 'content-type']);
+const ALLOW = new Set(['accept', 'accept-language', 'range', 'content-type', 'if-none-match',
+  'if-modified-since']);
+// Text-like bodies compress to a third or less; images, video and woff/woff2 already are.
+const ZIP = new RegExp('^(text/|application/([\\w.+-]*json|(x-)?javascript|ecmascript|[\\w.+-]*xml'
+  + '|wasm)|image/svg\\+xml|font/(ttf|otf)|application/(x-font-ttf|vnd\\.ms-fontobject))', 'i');
+export function zippable(headers = []) {
+  const get = (n) => headers.find(([k]) => k === n)?.[1];
+  const len = Number(get('content-length'));
+  if (!ZIP.test(get('content-type') ?? '')) return false;
+  return get('content-encoding') || !(len < 200); // tiny bodies stay as they are
+}
+const canZip = typeof CompressionStream !== 'undefined'
+  && typeof DecompressionStream !== 'undefined';
+
+// Inverse of the Host's gzip, with the same size limit as an uncompressed body (no zip bombs).
+export async function gunzip(blob, max = MAX) {
+  const rd = blob.stream().pipeThrough(new DecompressionStream('gzip')).getReader();
+  const parts = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await rd.read();
+    if (done) return new Blob(parts);
+    if ((total += value.length) > max) {
+      rd.cancel().catch(() => {});
+      throw new Error('too large');
+    }
+    parts.push(value);
+  }
+}
 export const toB64 = (buf) => {
   const u = new Uint8Array(buf);
   let s = '';
@@ -87,11 +116,17 @@ export function attach(peer, opts = {}) {
       if (why2) throw new Error(`redirect to ${why2}`);
       if (!(out.status >= 100 && out.status <= 599)) throw new Error(`bad status ${out.status}`);
       onlog(`${out.status} ${r.url}${out.location ? ` -> ${out.location}` : ''}`);
+      const zip = canZip && out.body && r.ae?.includes('gzip') && zippable(out.headers);
       say('res', {
         id: r.id, status: out.status, url: out.url, headers: out.headers,
-        cookies: out.setCookies, location: out.location,
+        cookies: out.setCookies, location: out.location, enc: zip ? 'gzip' : undefined,
       });
-      const rd = out.body?.getReader();
+      let raw = 0; // the limit counts the body itself, not its gzip
+      const cap = new TransformStream({ transform(ch, c) {
+        if ((raw += ch.length) > MAX) c.error(new Error('too large')); else c.enqueue(ch);
+      } });
+      const rd = (zip ? out.body.pipeThrough(cap).pipeThrough(new CompressionStream('gzip'))
+        : out.body)?.getReader();
       let total = 0;
       while (rd) {
         const { done, value } = await rd.read();
@@ -125,7 +160,15 @@ export function attach(peer, opts = {}) {
     if (!p) return;
     p.at = Date.now();
     if (op === 'res') p.head = m;
-    else if (op === 'fin') { pending.delete(m.id); p.ok({ ...p.head, body: new Blob(p.chunks) }); }
+    else if (op === 'fin') {
+      pending.delete(m.id);
+      const body = new Blob(p.chunks);
+      if (p.head?.enc === 'gzip') {
+        gunzip(body).then((b) => p.ok({ ...p.head, body: b }), p.fail);
+      } else {
+        p.ok({ ...p.head, body });
+      }
+    }
     else if (op === 'err') { pending.delete(m.id); p.fail(new Error(m.message)); }
   };
   peer.onbin = (buf) => {
@@ -165,7 +208,9 @@ export function attach(peer, opts = {}) {
       const { body, ...rest } = opts;
       if (body?.byteLength > MAX_BODY) return fail(new Error('request body too large'));
       pending.set(id, { chunks: [], ok, fail, t0: Date.now(), at: Date.now() });
-      say('req', { id, url, headers, ...rest, body: body?.byteLength ? toB64(body) : undefined });
+      const ae = canZip ? 'gzip' : undefined; // the Host may compress text bodies
+      const b64 = body?.byteLength ? toB64(body) : undefined;
+      say('req', { id, url, headers, ...rest, ae, body: b64 });
       watch(id);
     }),
   };

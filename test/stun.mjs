@@ -23,6 +23,7 @@ const { pickStun } = await import('../src/diag.js');
   const r = await pickStun(urls, 400, 3);
   assert.deepEqual(r.up, ['stun:fast', 'stun:mid', 'stun:slow']);
   assert.equal(r.answered, 3);
+  assert.equal(r.total, 5);
   assert.ok(Date.now() - t0 < 300, 'no wait for the dead ones once enough answered');
 }
 { // fewer than max answer: those, after the timeout

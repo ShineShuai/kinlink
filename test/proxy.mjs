@@ -1,7 +1,7 @@
 // Run: node test/proxy.mjs   (two fake peers wired back to back, fetch stubbed)
 import assert from 'node:assert/strict';
 import { Peer } from '../src/p2p.js';
-import { attach, blocked } from '../src/proxy.js';
+import { attach, blocked, gunzip, zippable } from '../src/proxy.js';
 
 for (const u of ['http://127.0.0.1/', 'http://2130706433/', 'http://10.1.2.3/',
   'http://192.168.0.1/', 'http://[::1]/', 'http://[fd00::1]/', 'http://localhost/',
@@ -139,6 +139,51 @@ await assert.rejects(off.fetch('https://example.com/'), /not serving/);
     .fetch('https://example.com/'), /timeout/);
   await assert.rejects((await mkpair({ exec: trickle }, { idleMs: 500, limitMs: 100 }))
     .fetch('https://example.com/'), /timeout/); // the hard limit
+}
+// Text bodies cross gzipped when the Client asked (it always does), others as they are
+{
+  const [X, Y] = [mk(), mk()];
+  let wire = 0;
+  const heads = [];
+  X.dc.send = (d) => queueMicrotask(() => Y.onmsg(d));
+  Y.dc.send = (d) => {
+    if (typeof d !== 'string') wire += d.byteLength;
+    else if (d.startsWith('res:')) heads.push(JSON.parse(d.slice(4)));
+    queueMicrotask(() => X.onmsg(typeof d === 'string' ? d
+      : d.buffer.slice(d.byteOffset, d.byteOffset + d.byteLength)));
+  };
+  const text = new TextEncoder().encode('<p>hello kinlink</p>\n'.repeat(5000)); // 105000 B
+  const type = { html: 'text/html; charset=utf-8', png: 'image/png' };
+  let kind = 'html';
+  const c = attach(X);
+  attach(Y, { exec: async () => ({
+    status: 200, url: 'https://example.com/', headers: [['content-type', type[kind]]],
+    body: new Blob([text]).stream(),
+  }) });
+  X.onopen();
+  Y.onopen();
+  await tick();
+  const r = await c.fetch('https://example.com/');
+  assert.equal(heads.at(-1).enc, 'gzip');
+  assert.ok(wire < 5000, `105000 B of repeated text on the wire: ${wire}`);
+  assert.deepEqual(new Uint8Array(await r.body.arrayBuffer()), text, 'the original arrives');
+  assert.equal(r.enc, 'gzip'); // the head says how it travelled; the body is already plain
+  wire = 0;
+  kind = 'png';
+  const img = await c.fetch('https://example.com/');
+  assert.equal(heads.at(-1).enc, undefined);
+  assert.ok(wire >= text.length, `images are sent as they are: ${wire}`);
+  assert.equal(img.body.size, text.length);
+  assert.ok(zippable([['content-type', 'application/json']]));
+  assert.ok(!zippable([['content-type', 'text/css'], ['content-length', '50']]));
+  assert.ok(zippable([['content-type', 'text/css'], ['content-length', '50'],
+    ['content-encoding', 'br']]), 'content-length of a body the browser decoded says nothing');
+  // zip bomb: 40 MiB of zeros are 40 KB of gzip; the Client stops at its limit
+  const zeros = new Blob([new Uint8Array(40 << 20)]).stream();
+  const bomb = zeros.pipeThrough(new CompressionStream('gzip'));
+  await assert.rejects(gunzip(await new Response(bomb).blob()), /too large/);
+  assert.equal((await gunzip(await new Response(new Blob(['abc']).stream()
+    .pipeThrough(new CompressionStream('gzip'))).blob())).size, 3);
 }
 const down = mk();
 down.dc.readyState = 'connecting';

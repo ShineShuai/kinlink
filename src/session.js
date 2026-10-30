@@ -7,7 +7,7 @@ import { attach } from './proxy.js';
 import { serveRemote } from './remote-host.js';
 import { pickStun } from './diag.js';
 
-export const BUILD = '0021';
+export const BUILD = '0022';
 
 // One pairing session: signaling (all brokers), sealed, one Peer, the relay fallback and the
 // request protocol. Used by the app tab and by the background Host (host.js).
@@ -24,8 +24,8 @@ export async function openSession(o) {
   if (o.probe !== false && stun.length) {
     const r = await pickStun(stun);
     stun = r.up;
-    const up = r.rows.filter((x) => x.ok).map((x) => `${new URL(x.url).host} ${x.ms} ms`);
-    onlog(`stun: ${r.answered}/${r.rows.length} answered${up.length ? `: ${up.join(', ')}` : ''}`);
+    const up = r.rows.filter((x) => x.ok).map((x) => `${x.url.replace(/^stun:/, '')} ${x.ms} ms`);
+    onlog(`stun: ${r.answered}/${r.total} answered${up.length ? `: ${up.join(', ')}` : ''}`);
   }
   let inner;
   if (o.signaling === 'bc') {

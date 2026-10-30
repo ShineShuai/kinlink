@@ -14,17 +14,19 @@ const refererFor = (url, referer) => {
   return a.origin === b.origin ? a.href.split('#')[0] : `${a.origin}/`;
 };
 
-export function browser(api, jar = new Jar()) {
+// cache: optional HttpCache (src/cache.js), shared by all pages of the tab.
+export function browser(api, jar = new Jar(), cache = undefined) {
   return {
     jar,
     // opts: { method, headers, body (ArrayBuffer), referer (real url of the page asking) }
     async fetch(url, { method = 'GET', headers = {}, body, referer } = {}) {
       const page = referer; // redirects keep the original referrer, like a browser
       for (let hop = 0; ; hop++) {
-        const r = await api.fetch(url, headers, {
+        const net = (h) => api.fetch(url, h, {
           method, body, cookie: jar.header(url), referer: refererFor(url, page),
           origin: method === 'POST' && page ? new URL(page).origin : undefined,
         });
+        const r = cache ? await cache.fetch(url, headers, { method }, net) : await net(headers);
         jar.store(url, r.cookies);
         if (!r.location || !REDIRECT.has(r.status)) return { ...r, url: r.url ?? url };
         if (hop >= MAX_HOPS) throw new Error('too many redirects');

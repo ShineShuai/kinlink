@@ -6,6 +6,7 @@ import { PERMS as RB_PERMS, rbWord } from './src/remote.js';
 import { CFG } from './src/diag.js';
 import { canRender, renderedUrl, startBridge } from './src/bridge.js';
 import { Jar } from './src/cookies.js';
+import { HttpCache } from './src/cache.js';
 import { browser } from './src/browse.js';
 import { execViaPort } from './src/ext-port.js';
 import { supervise } from './src/supervise.js';
@@ -34,17 +35,21 @@ const ORIGINS = { origins: ['<all_urls>'] };
 const PAGES_URL = 'https://shineshuai.github.io/kinlink/'; // hosted Client page
 let session, peer, api, viewer;
 const jar = new Jar(); // cookies of the sites we browse, kept in this tab only
-const browse = () => api && browser(api, jar);
+const cache = new HttpCache(); // and so are the cached responses (memory only)
+const browse = () => api && browser(api, jar, cache);
 // The extension host does single hops with Cookie/Referer/Origin (in its service worker, see
 // ext-port.js); else plain fetch (see proxy.js).
 const hostExec = isExt && !!chrome.runtime.connect;
 const state = { sig: 'signaling: -', link: 'new', peer: 'peer: not connected' };
+let words = ''; // link and remote words last written to the log
 const paint = () => {
   const rb = rbWord({
     peerServes: state.peerServes, peerRemote: state.peerRemote,
     allowed: $('remote').checked, using: state.using,
   });
   $('status').textContent = `${state.sig} | link: ${state.link} | ${state.peer} | ${rb}`;
+  const now = `link: ${state.link} | ${rb}`; // the status line is not in the log: say changes
+  if (now !== words && state.link !== 'new') log(words = now);
 };
 const showPeer = (m) => {
   Object.assign(state, { peerServes: !!m.serving, peerRemote: !!m.remote });

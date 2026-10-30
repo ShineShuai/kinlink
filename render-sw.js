@@ -28,9 +28,11 @@ async function ask(url, req) {
   if (!tab) throw new Error('no connected Kinlink app tab (keep it open)');
   return new Promise((ok, fail) => {
     const { port1, port2 } = new MessageChannel();
-    const t = setTimeout(() => fail(new Error('app tab did not answer')), 35000);
+    const quiet = () => setTimeout(() => fail(new Error('app tab did not answer')), 35000);
+    let t = quiet();
     port1.onmessage = ({ data }) => {
       clearTimeout(t);
+      if (data.wait) { t = quiet(); return; } // the tab is alive, the peer is slow
       if (data.error) fail(new Error(data.error)); else ok(data);
     };
     tab.postMessage({ type: 'req', url, ...req }, [port2]);

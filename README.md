@@ -16,7 +16,7 @@ The Client never contacts the target site.
 3. Client: open the invite link. It connects and offers by itself, nothing to click. The offer is
    re-sent for 60 s, so it does not matter which side is first.
 4. The status line shows `signaling: 2/3 signaling servers | link: direct (srflx/srflx udp) |
-   peer: build 0021, serving yes | remote: host off`. `link` is `direct`, `relay` or the ICE
+   peer: build 0022, serving yes | remote: host off`. `link` is `direct`, `relay` or the ICE
    state; `remote` is `host allows`/`host off` (Client) or `off`/`allowed`/`in use` (Host). Then either:
    - "Open rendered": new tab at `.../kinlink/~/<url>`, a real page through the peer
      (hosted web page only; keep the app tab open). Typing `.../kinlink/~/example.com/` works too.
@@ -50,6 +50,8 @@ If it does not connect (the log says where it stops):
   offers again, the Host restarts for the new offer. Gaps grow 5, 10, 20, 40, 60 s while sessions
   die young (`src/supervise.js`). Connect or Offer takes over; the background Host always did
   this. An open remote browser or a running download ends with the old session.
+- `link: ..` and `remote: ..` lines in the log say when the link or the remote browser state
+  changes (the status line above the log has them, the Copy button copies both).
 - Link `direct` or `relay` but `no hello`: one side runs old code. Reload the extension and all tabs.
 
 Signaling is always MQTT (all brokers at once, nothing to choose). `?signaling=bc` is a dev-only
@@ -228,3 +230,13 @@ Local: `npm test`, `bash scripts/build-site.sh`,
   volume. A malicious broker can replay
   old frames of an earlier session (needs per-session keys). No own WSS/TURN relay yet.
 - Bodies are buffered (32 MiB max), no streaming.
+- Compression: the Client asks for gzip (`req.ae`), the Host gzips text-like bodies (HTML, CSS,
+  JS, JSON, XML, SVG, wasm, ttf/otf) as they cross: the browser has already decoded what the site
+  sent, so without this a 300 KB script crossed as 300 KB. Images, video and woff/woff2 are sent
+  as they are. The Client unzips with the same size limit as a plain body.
+- Cache (`src/cache.js`): the Client keeps GET responses in memory (64 MiB, gone with the tab):
+  fresh ones (`max-age`, `Expires`) answer without any request; stale ones with `ETag` /
+  `Last-Modified` are revalidated (the Host passes `If-None-Match` / `If-Modified-Since`, a 304
+  reuses the stored body); permanent redirects with a lifetime too. Not stored: `no-store`,
+  Set-Cookie, `Vary: Cookie`, Range, bodies over 8 MiB, no heuristic lifetimes. The log shows
+  `render 200 <url> <n> B (cached)` for a hit. Reload the tab to empty it.

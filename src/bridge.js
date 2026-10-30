@@ -17,17 +17,22 @@ export async function startBridge(getBrowse, onlog = () => {}) {
   sw.onmessage = async ({ data, ports: [port] }) => {
     if (data?.type === 'who') return beat();
     if (data?.type !== 'req') return;
+    // The worker gives up on a silent tab (35 s); a request that waits for a slow peer (relay,
+    // proxy.js times out by itself) says it is alive.
+    const alive = setInterval(() => port.postMessage({ wait: true }), 5000);
     try {
       const b = getBrowse();
       if (!b) throw new Error('app tab has no peer: Connect first');
       const { url, method, headers, referer } = data;
       const r = await b.fetch(url, { method, headers, body: data.body, referer });
       const bytes = await r.body.arrayBuffer();
-      onlog(`render ${r.status} ${url} ${bytes.byteLength} B`);
+      onlog(`render ${r.status} ${url} ${bytes.byteLength} B${r.cached ? ' (cached)' : ''}`);
       port.postMessage({ status: r.status, url: r.url, headers: r.headers, body: bytes }, [bytes]);
     } catch (e) {
       onlog(`render err ${data.url}: ${e.message}`);
       port.postMessage({ error: e.message });
+    } finally {
+      clearInterval(alive);
     }
   };
   setInterval(beat, 5000); // real-time connections are exempt from timer throttling
