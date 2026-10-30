@@ -229,6 +229,11 @@ with sync_playwright() as p:
         raise AssertionError("no frame arrived\n" + client.inner_text("#log")
                              + host.inner_text("#log"))
     check(client.title() == "Kinlink: rb-on", f"page JavaScript ran on the host: {client.title()}")
+    for _ in range(30):
+        if " fps, " in client.inner_text(f"{box} span"):
+            break
+        client.wait_for_timeout(200)
+    check(" KB/s, " in client.inner_text(f"{box} span"), "the viewer shows frames per second")
 
     def at(x, y):  # remote viewport px -> page px
         b = cv.bounding_box()

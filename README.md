@@ -16,7 +16,7 @@ The Client never contacts the target site.
 3. Client: open the invite link. It connects and offers by itself, nothing to click. The offer is
    re-sent for 60 s, so it does not matter which side is first.
 4. The status line shows `signaling: 2/3 signaling servers | link: connected | peer: build
-   0017, serving yes`. Then either:
+   0018, serving yes`. Then either:
    - "Open rendered": new tab at `.../kinlink/~/<url>`, a real page through the peer
      (hosted web page only; keep the app tab open). Typing `.../kinlink/~/example.com/` works too.
    - "Fetch via peer": script-free preview in this page (also works in the extension page).
@@ -94,8 +94,8 @@ same tab navigates instead; one remote browser at a time. Chrome shows its "is b
 user sees it. Known gaps: names that resolve to private IPs (as for fetch); camera, microphone
 and location prompts of the page appear on the Host; copy to the Client clipboard, file upload
 and drag and drop are missing; if the Host's screen is smaller than the viewport the picture is
-cropped; if other windows cover it, Chrome may stop painting; the frame rate depends on the link
-and was not measured. Tested in Chromium with the real extension (click,
+cropped; if other windows cover it, Chrome may stop painting; the frame rate depends on the link:
+the viewer's status line shows live frames per second, KB per second and KB per frame. Tested in Chromium with the real extension (click,
 typing, SSRF block, address bar, close, through the background Host); not tested over a real
 network, with real sites, or on macOS and Windows.
 

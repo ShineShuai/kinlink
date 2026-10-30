@@ -39,11 +39,19 @@ export function mountRemote(box, peer, { can = () => null, onlog = () => {} } = 
   let view = size(1024, 640);
   let live = false;
   const ctx = canvas.getContext('2d');
-  const say = (t) => { status.textContent = ` ${t}`; };
+  let msg = '';
+  let stat = ''; // live numbers: frames/s, KB/s, KB per frame
+  const paint = () => { status.textContent = ` ${msg}${stat ? ` | ${stat}` : ''}`; };
+  const say = (t) => { msg = t; paint(); };
+  const num = { frames: 0, bytes: 0, last: 0 };
+  let meter;
   const rect = () => canvas.getBoundingClientRect();
   const viewNow = () => viewOf(rect(), view.w);
 
   const asm = new FrameAssembler(async (blob, m) => {
+    num.frames++;
+    num.bytes += blob.size;
+    num.last = blob.size;
     try {
       const bmp = await createImageBitmap(blob);
       if (canvas.width !== bmp.width || canvas.height !== bmp.height) {
@@ -68,7 +76,12 @@ export function mountRemote(box, peer, { can = () => null, onlog = () => {} } = 
       if (m.title) document.title = `Kinlink: ${m.title}`;
       say(m.loading ? 'loading…' : m.title ?? '');
     } else if (op === 'rbe') { say(m.message); onlog(`remote: ${m.message}`); }
-    else if (op === 'rbc') { live = false; say('closed by the host'); }
+    else if (op === 'rbc') {
+      live = false;
+      clearInterval(meter);
+      stat = '';
+      say('closed by the host');
+    }
     return undefined;
   };
   const prevBin = peer.onbin;
@@ -132,6 +145,8 @@ export function mountRemote(box, peer, { can = () => null, onlog = () => {} } = 
   function close() {
     if (live) send('rbx');
     live = false;
+    clearInterval(meter);
+    stat = '';
     box.hidden = true;
     removeEventListener('resize', onresize);
   }
@@ -146,6 +161,13 @@ export function mountRemote(box, peer, { can = () => null, onlog = () => {} } = 
       live = true;
       say('opening…');
       send('rbo', { url: url.value, ...view, q: 60 });
+      clearInterval(meter);
+      meter = setInterval(() => {
+        stat = `${num.frames} fps, ${Math.round(num.bytes / 1024)} KB/s, `
+          + `${Math.round(num.last / 1024)} KB/frame`;
+        Object.assign(num, { frames: 0, bytes: 0 });
+        paint();
+      }, 1000);
       addEventListener('resize', onresize);
       canvas.focus();
     },
