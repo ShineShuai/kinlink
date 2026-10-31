@@ -26,7 +26,9 @@ def serve_fake_site(route):
 def pair(browser, client_first, relay=None, reconnect=False):
     """Host page (extension stubbed) and Client page (invite link) over a fake broker.
     relay: "only" = ?relay=0&ice=relay on both pages, no direct path: frames travel over the
-    broker. "then-direct" = ?relay=0 only: starts on the relay, the direct path takes over."""
+    broker. "then-direct" = ?relay=0 only: starts on the relay, the direct path takes over.
+    "client-only" = relay-only on the invite link only (what a user does to try the relay): the
+    Host page has no parameters and joins when the Client's OPEN arrives."""
     ctx = browser.new_context()
     ctx.set_default_timeout(45000)
     # good.test and good2.test are one broker cluster (like broker.emqx.io and broker-cn.emqx.io):
@@ -38,10 +40,12 @@ def pair(browser, client_first, relay=None, reconnect=False):
     host.route("https://site.test/**", serve_fake_site)
     # dead.test never resolves
     query = "?mqtt=wss://dead.test/mqtt,wss://good.test/mqtt,wss://good2.test/mqtt"
-    query += {"only": "&relay=0&ice=relay", "then-direct": "&relay=0"}.get(relay, "")
-    host.goto(f"{base}/index.html{query}")
+    host_q = query + {"only": "&relay=0&ice=relay", "then-direct": "&relay=0"}.get(relay, "")
+    link_q = query + {"only": "&relay=0&ice=relay", "then-direct": "&relay=0",
+                      "client-only": "&relay=0&ice=relay"}.get(relay, "")
+    host.goto(f"{base}/index.html{host_q}")
     secret = host.input_value("#secret")
-    link = f"{base}/index.html{query}#{secret}"
+    link = f"{base}/index.html{link_q}#{secret}"
     status = "document.getElementById('status').textContent"
 
     def start_host():
@@ -191,6 +195,7 @@ with sync_playwright() as p:
     pair(browser, client_first=False, relay="only")
     pair(browser, client_first=True, relay="only")
     pair(browser, client_first=False, relay="then-direct")
+    pair(browser, client_first=False, relay="client-only")
     pair(browser, client_first=False, reconnect=True)
     browser.close()
 srv.shutdown()

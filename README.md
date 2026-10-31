@@ -16,7 +16,7 @@ The Client never contacts the target site.
 3. Client: open the invite link. It connects and offers by itself, nothing to click. The offer is
    re-sent for 60 s, so it does not matter which side is first.
 4. The status line shows `signaling: 2/3 signaling servers | link: direct (srflx/srflx udp) |
-   peer: build 0022, serving yes | remote: host off`. `link` is `direct`, `relay` or the ICE
+   peer: build 0023, serving yes | remote: host off`. `link` is `direct`, `relay` or the ICE
    state; `remote` is `host allows`/`host off` (Client) or `off`/`allowed`/`in use` (Host). Then either:
    - "Open rendered": new tab at `.../kinlink/~/<url>`, a real page through the peer
      (hosted web page only; keep the app tab open). Typing `.../kinlink/~/example.com/` works too.
@@ -61,10 +61,18 @@ never selected automatically.
 Invite link base: field above the status line (extension page default: the hosted page; set
 `http://localhost:8000/` to test with a local copy, served by `python3 -m http.server 8000`).
 
-Corpus (needs internet, run locally): `python3 test/corpus.py` loads ~20 real sites through the
-real extension and the rendering layer in one Chromium and writes `corpus-report/report.md` with a
-PASS/WARN/FAIL per site and a screenshot. `python3 test/corpus.py https://my.site/ ...` for your
-own list. This is the measurement for "is rewriting good enough?".
+Corpus (needs internet, run locally; use the same venv as the other e2e tests):
+`python3 test/corpus.py` loads ~20 real sites through the real extension (Host) and the rendering
+layer (Client) in ONE Chromium and writes `corpus-report/report.md`: a verdict per site (PASS,
+WARN, BLOCK = a bot check such as CAPTCHA, JS challenge, 202/403/429, FAIL), a screenshot, and a
+details section (URLs that escaped the rewriting and were blocked by the CSP, failed requests,
+the first JS errors, the page text of a block page). `python3 test/corpus.py https://my.site/ ...`
+for your own list. Default mode: the Host's network is the machine's own and the link is local, so
+it measures what the rewriting can render, not a China path.
+For that path: `python3 test/corpus.py --join <secret>` is Client only; it joins a Host that runs
+elsewhere (its page shows the secret; background mode is fine) over the real brokers, so run it on
+the machine in China with the Host abroad. `--base` (Client site), `--mqtt` (brokers) and
+`--headed` are optional; the report then also has the load time per site.
 
 Diagnostics: `.../kinlink/diag.html?auto` runs the probes on load; "Copy JSON" for results.
 
@@ -138,6 +146,20 @@ behind mDNS names, access points can isolate clients, and the router would need 
 ICE then ends `failed` after about 15 s. The relay opens before that (8 s), and the Host keeps the
 session as long as a channel works, whatever ICE says. Status shows `link: relay` (slow but fine
 for pages). Use two different networks to test the direct path.
+
+## Try the relay yourself
+
+On one machine and one network: the Host as usual (background is fine), then open the invite link
+with the test parameters in front of the `#`:
+`https://shineshuai.github.io/kinlink/?relay=0&ice=relay#<secret>`
+(`?ice=relay` blocks the direct path, `?relay=0` starts the relay at once; only the Client needs
+them, the Host joins when the Client's OPEN arrives). Expected: `link: relay` in the status line
+and the log, no `ice:` lines. Throughput: "Fetch via peer" a file of 1 to 10 MB (the line under
+the button shows ms; use a type that is not gzipped, e.g. a `.bin` or `.dat` file) and watch
+`render 200 <url> <n> B <ms> ms` in the log for pages. Other networks: put one machine on a phone
+hotspot (mobile data) and use the plain invite link: if both sides are behind NAT that the direct
+path cannot cross (CGNAT, symmetric), it falls back to the relay by itself after 8 s. The remote
+browser needs a direct link, so it is refused on the relay.
 
 ## Relay fallback (`src/relay.js`)
 If WebRTC finds no path (CGNAT, same NAT, UDP blocked), the same protocol runs over the signaling

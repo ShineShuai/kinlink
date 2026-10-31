@@ -24,9 +24,12 @@ export async function startBridge(getBrowse, onlog = () => {}) {
       const b = getBrowse();
       if (!b) throw new Error('app tab has no peer: Connect first');
       const { url, method, headers, referer } = data;
+      const t0 = performance.now();
       const r = await b.fetch(url, { method, headers, body: data.body, referer });
       const bytes = await r.body.arrayBuffer();
-      onlog(`render ${r.status} ${url} ${bytes.byteLength} B${r.cached ? ' (cached)' : ''}`);
+      const ms = Math.round(performance.now() - t0);
+      const hit = r.cached ? ' (cached)' : '';
+      onlog(`render ${r.status} ${url} ${bytes.byteLength} B ${ms} ms${hit}`);
       port.postMessage({ status: r.status, url: r.url, headers: r.headers, body: bytes }, [bytes]);
     } catch (e) {
       onlog(`render err ${data.url}: ${e.message}`);
